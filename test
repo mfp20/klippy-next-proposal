@@ -1,0 +1,11 @@
+#!/bin/bash
+
+CFG="/home/user/next/printer.cfg"
+
+if [ "$1" == "simple" ];then
+	CFG="/home/user/next/simple.printer.cfg"
+fi
+
+/home/user/klippy-env/bin/python /home/user/next/klippy/klippy.py $CFG -v
+#/home/user/klippy-env/bin/python /home/user/next/klippy/console.py /tmp/pseudoserial 250000
+
