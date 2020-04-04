@@ -85,7 +85,7 @@ class Manager:
         # configure toolhead(s)
         for t in self.tree.printer.get_many_deep("toolhead ", list()): 
             t.children["gcode "+t.name.split(" ")[1]].object = t.children["gcode "+t.name.split(" ")[1]].module.Gcode(self, t.children["gcode "+t.name.split(" ")[1]])
-            if isinstance(t.object, instrument.ToolHead):
+            if isinstance(t.object, instrument.Object):
                 logging.info("- Building and configuring %s", t.name)
                 t.object.build()
         del(self.ready_part)

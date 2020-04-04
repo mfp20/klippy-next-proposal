@@ -1,12 +1,12 @@
 #!/bin/bash
 
-CFG="/home/user/klippy-next-proposal/printer.cfg"
+CFG="/home/user/next/printer.cfg"
 
 if [ "$1" == "simple" ];then
-	CFG="/home/user/klippy-next-proposal/simple.printer.cfg"
+	CFG="/home/user/next/simple.printer.cfg"
 fi
 
 
-/home/user/klippy-env/bin/python /home/user/klippy-next-proposal/klippy/klippy.py $CFG -v
-#/home/user/klippy-env/bin/python /home/user/klippy-next-proposal/klippy/klippy.py $CFG -v -l klippy-next-proposal.log -i test.gcode
+/home/user/klippy-env/bin/python /home/user/next/klippy/klippy.py $CFG -v
+#/home/user/klippy-env/bin/python /home/user/next/klippy/klippy.py $CFG -v -l klippy-next.log -i test.gcode
 

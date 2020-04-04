@@ -1,6 +1,7 @@
 # Code for coordinating events on the printer toolhead
 #
 # Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
@@ -196,26 +197,19 @@ class DripModeEndSignal(Exception):
 
 attrs = ("x", "y", "z", "instrument", "max_velocity", "max_accel", "max_z_velocity", "max_z_accel")
 
-class DummyToolHead(composite.Object):
+class Dummy(composite.Object):
     def __init__(self, hal, node):
-        logging.warning("DummyToolHead:__init__()")
-        self.hal = hal
-        self.node = node
+        logging.warning("instrument.Dummy:__init__()")
+	composite.Object(hal, node)
     def init(self):
-        logging.warning("DummyToolHead:init()")
+        logging.warning("instrument.Dummy:init()")
     def move(self, newpos, speed):
-        logging.warning("DummyToolHead:move()")
+        logging.warning("instrument.Dummy:move()")
     def get_position(self):
-        logging.warning("DummyToolHead:get_position()")
-
-class DummyKinematic:
-    def __init__(self, hal, node):
-        logging.warning("DUMMY TOOLHEAD!!!")
-        self.hal = hal
-        self.node = node
+        logging.warning("instrument.Dummy:get_position()")
 
 # Main code to track events (and their timing) on the printer toolhead
-class ToolHead(composite.Object):
+class Object(composite.Object):
     def init(self):
         self.gcode = self.hal.get_gcode(self.node.name.split(" ")[1])
         self.reactor = self.hal.get_reactor()
@@ -266,8 +260,7 @@ class ToolHead(composite.Object):
         self.extruder = extruder.DummyExtruder()
         kin_name = self.node.attrs["kinematics"]
         #try:
-        self.kin = self.node.get_first_deep("kinematic ").object
-        self.kin.get(self.node)
+	self.kin = self.node.get_first_deep("kinematic ").object.get(self.node)
         #except config.error as e:
         #    raise
         #except hal.tree.printer.children["pins"].object.error as e:
@@ -644,9 +637,9 @@ def load_node_object(hal, node):
             config_ok = False
             break
     if config_ok:
-        node.object = ToolHead(hal, node)
+        node.object = Object(hal, node)
     else:
-        node.object = DummyToolHead(hal, node)
+        node.object = Dummy(hal, node)
 
     #kinematics.extruder.add_printer_objects(config)
 

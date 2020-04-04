@@ -10,7 +10,7 @@ import hw, part, instrument
 
 attrs = ()
 
-class Robot(part.Object):
+class Object(part.Object):
     def get(self, thnode):
         toolhead = thnode.object
         # Setup axis rails
@@ -58,6 +58,7 @@ class Robot(part.Object):
             dc_rail.set_max_jerk(max_halt_velocity, max_accel)
             self.dual_carriage_rails = [self.rails[self.dual_carriage_axis], dc_rail]
             self.hal.get_gcode().register_command('SET_DUAL_CARRIAGE', self.cmd_SET_DUAL_CARRIAGE, desc=self.cmd_SET_DUAL_CARRIAGE_help)
+	return self
     def get_steppers(self):
         rails = self.rails
         if self.dual_carriage_axis is not None:
@@ -150,8 +151,8 @@ class Robot(part.Object):
         self._activate_carriage(carriage)
         gcode.reset_last_position()
 
-# toolhead node-tree is built in cartesian module
-# because each kinematic can have different options
+# toolhead node-tree is built in cartesian module because
+# each kinematic have different toolhead options,
 # and doesn't need any children
 def load_tree_node(hal, thnode, parts):
     used_parts = set()
@@ -196,8 +197,8 @@ def load_node_object(hal, node):
             config_ok = False
             break
     if config_ok:
-        node.object = Robot(hal, node)
+        node.object = Object(hal, node)
     else:
-        node.object = instrument.DummyKinematic(hal, node)
+        node.object = kinematics.dummy.Object(hal, node)
     return node.object
 
