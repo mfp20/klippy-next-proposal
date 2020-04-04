@@ -1,4 +1,4 @@
-# Example module.
+# Example plugin.
 #
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 # 

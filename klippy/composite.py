@@ -8,8 +8,10 @@ import logging
 import part
 
 class Object(part.Object):
-    def subs(self, root):
-        return root.list_children_deep(list(), root)
+    def __init__(self, hal, node):
+        part.Object.__init__(self,hal,node)
+    def subs(self):
+        return root.list_children_deep(list(), self.node)
     def sub_group(self, root, group):
         return root.get_many_deep(group+" ", list(), root)
     def sub_group_type(self, r, g, t):

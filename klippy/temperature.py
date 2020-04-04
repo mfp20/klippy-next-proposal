@@ -32,21 +32,21 @@ class Object:
         self.hal = hal
         self.node = hnode
     def init(self):
-        self.sensor = {}
-        self.heater = {}
-        self.cooler = {}
+        self.tcontroller = {}
         self.gcodeid = {}
-        # register handlers and commands
     def register(self):
-        self.hal.get_printer().register_event_handler("gcode:request_restart", self.turn_off_all_heaters)
-        self.hal.get_commander().register_command("TURN_OFF_HEATERS", self.cmd_TURN_OFF_HEATERS, desc=self.cmd_TURN_OFF_HEATERS_help)
-    # sensors
-    def sensor_setup(self, hal, node):
+        self.hal.get_printer().register_event_handler("controller:request_restart", self._off_all_controls)
+        self.hal.get_commander().register_command("TEMPERATURE_HEATERS_OFF", self.cmd_TEMPERATURE_HEATERS_OFF, desc=self.cmd_TEMPERATURE_HEATERS_OFF_help)
+        self.hal.get_commander().register_command("TEMPERATURE_COOLERS_OFF", self.cmd_TEMPERATURE_COOLERS_OFF, desc=self.cmd_TEMPERATURE_COOLERS_OFF_help)
+        self.hal.get_commander().register_command("TEMPERATURE_CONTROL_OFF", self.cmd_TEMPERATURE_CONTROL_OFF, desc=self.cmd_TEMPERATURE_CONTROL_OFF_help)
+    # setup temperature controller
+    def tc_setup(self):
         sensor_type = hal.get(node, "type")
         if sensor_type not in self.sensor_factories:
             raise self.printer.config_error("Unknown temperature sensor '%s'" % (sensor_type,))
         return self.sensor_factories[sensor_type](hal, node)
-    def sensor_register(self, hal, node, psensor, gcode_id=None):
+    # register temperature controller to the given commander
+    def tc_register(self, psensor, gcode_id=None):
         if gcode_id is None:
             gcode_id = hal.get(node, "gcode_id", None)
             if gcode_id is None:
@@ -55,46 +55,38 @@ class Object:
             raise self.printer.config_error("G-Code sensor id %s already registered" % (gcode_id,))
         self.gcode_id_to_sensor[gcode_id] = psensor
         self.available_sensors.append(node.name)
-    def get_sensor(self, name):
-        return None
-    def get_sensors_all(self):
-        return self.sensor_active
-    def get_sensors_gcode(self):
+        #self.gcode.register_mux_command("SET_TEMPERATURE", "TCONTROL", self.name, self.cmd_SET_TEMPERATURE, desc=self.cmd_SET_TEMPERATURE_help)
+    def get_tc(self, name):
+        return self.tcontroller[name]
+    def get_tc_all(self):
+        return self.tcontroller
+    def get_gcode(self):
         return self.gcode_id_to_sensor.items()
-    # heaters
-    def heater_setup(self, hal, node, gcode_id=None):
-        heater_name = node.name.split()[-1]
-        if heater_name in self.heaters:
-            raise config.error("Temperature controller %s already registered" % (heater_name,))
-        # Setup sensor
-        sensor = self.setup_sensor(hal, node)
-        # Create heater
-        self.heaters[heater_name] = heater = Tcontrol(hal, node, sensor)
-        self.register_sensor(hal, node, heater, gcode_id)
-        self.available_heaters.append(node.name)
-        return heater
-    def get_heater(self, name):
-        if heater_name not in self.heaters:
-            raise self.printer.config_error("Unknown temperature controller '%s'" % (heater_name,))
-        return self.heaters[heater_name]
-    def get_all_heaters(self):
-        return self.heater_active
-    # coolers
-    def cooler_setup(self, hal, node, gcode_id=None):
-        return None
-    def get_cooler(self, heater_name):
-        return None
-    def get_all_coolers(self):
-        return self.cooler_active
-    #
-    def turn_off_all_heaters(self, print_time=0.):
+    # commands handlers
+    def _off_all_heaters(self, print_time=0.):
         for heater in self.heaters.values():
             heater.set_temp(0.)
-    cmd_TURN_OFF_HEATERS_help = "Turn off all heaters"
-    def cmd_TURN_OFF_HEATERS(self, params):
-        self.turn_off_all_heaters()
+    def _off_all_coolers(self, print_time=0.):
+        for heater in self.heaters.values():
+            heater.set_temp(0.)
+    def _off_all_controls(self, print_time=0.):
+        self.off_all_heaters()
+        self.off_all_coolers()
+    cmd_TEMPERATURE_HEATERS_OFF_help = "Turn off all heaters"
+    def cmd_TEMPERATURE_HEATERS_OFF(self, params):
+        self._off_all_heaters()
+    cmd_TEMPERATURE_COOLERS_OFF_help = "Turn off all coolers"
+    def cmd_TEMPERATURE_COOLERS_OFF(self, params):
+        self._off_all_coolers()
+    cmd_TEMPERATURE_CONTROL_OFF_help = "Turn off all controls (heaters and coolers included)"
+    def cmd_TEMPERATURE_CONTROL_OFF(self, params):
+        self._off_all_controls()
     def get_status(self, eventtime):
         return {'available_heaters': self.available_heaters, 'available_sensors': self.available_sensors}
+    cmd_SET_TEMPERATURE_help = "Sets the temperature for the given controller"
+    def cmd_SET_TEMPERATURE(self, params):
+        temp = self.gcode.get_float('TARGET', params, 0.)
+        self.set_temp(temp)
 
 def load_node_object(hal, node):
     node.object = Object(hal, node)

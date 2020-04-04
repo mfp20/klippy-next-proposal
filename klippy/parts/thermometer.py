@@ -196,6 +196,7 @@ class LinearResistance:
         r = self.li.reverse_interpolate(temp)
         return r / (self.pullup + r)
 
+# Non linear approximation (Steinhart-Hart)
 class NonLinearResistance:
     def __init__(self, name, pullup, inline_resistor, params):
         #logging.debug("                 NON LINEAR RESISTANCE %s %s %s %s", name, pullup, inline_resistor, params)
@@ -317,14 +318,14 @@ class ADC:
 
 # TODO
 class I2C(sensor.Object):
-    def __init__(self, node):
-        logging.warning("TODO i2c thermometer %s", self.node.name)
+    def __init__(self, params):
+        logging.warning("TODO i2c thermometer")
         self.probe = None
 
 # TODO
 class SPI(sensor.Object):
-    def __init__(self, node):
-        logging.warning("TODO spi thermometer %s", self.node.name)
+    def __init__(self, params):
+        logging.warning("TODO spi thermometer")
         self.probe = None
 
 ######################################################################
@@ -332,26 +333,38 @@ class SPI(sensor.Object):
 ######################################################################
 
 attrs = ("type", "model")
-
-# TODO
-class Dummy(sensor.Object):
-    def __init__(self, hal, node):
-        logging.warning("TODO dummy thermometer %s", self.node.name)
-        self.hal = hal
-        self.node = node
-    def configure(self):
-        self.sensor = None
-
 SAMPLE_TIME = 0.001
 SAMPLE_COUNT = 8
 REPORT_TIME = 0.300
 RANGE_CHECK_COUNT = 4
 
+# TODO
+class Dummy(sensor.Object):
+    def __init__(self, hal, node):
+        sensor.Object(hal,node)
+        logging.warning("thermometer.Dummy:__init__():%s", self.node.name)
+    def configure(self):
+        logging.warning("thermometer.Dummy:configure():%s", self.node.name)
+        self.sensor = None
+    def setup_callback(self, temperature_callback):
+        self.temperature_callback = temperature_callback
+    def get_report_time_delta(self):
+        return REPORT_TIME
+    def adc_callback(self, read_time, read_value):
+        # TODO make a fake temp
+        #temp = 
+        #self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp)
+        pass
+    def setup_minmax(self, min_temp, max_temp):
+        # TODO make a fake adc_range
+        #adc_range = 
+        #self.mcu_adc.setup_minmax(SAMPLE_TIME, SAMPLE_COUNT, minval=min(adc_range), maxval=max(adc_range), range_check_count=RANGE_CHECK_COUNT)
+        pass
+
 # TODO attrs checks for each model of sensor
 # TODO test custom sensors
 class Object(sensor.Object):
     def configure(self):
-        #logging.debug("THERMOMETER %s (%s)", self.node.name.split(" ")[1], self.node.attrs["model"])
         # setup thermometer probe
         params = {}
         params["name"] = self.node.name.split(" ")[1]
@@ -420,8 +433,6 @@ class Object(sensor.Object):
                 self.sensor = I2C(params)
             elif name[1] == "spi":
                 self.sensor = SPI(params)
-        #logging.debug("     SENSOR: %s", self.sensor)
-        #logging.debug("         PROBE: %s", self.sensor.probe)
         # register thermometer
         self.mcu_adc = self.hal.get_controller().pin_setup("adc", self.node.get("pin"))
         self.mcu_adc.setup_adc_callback(REPORT_TIME, self.adc_callback)

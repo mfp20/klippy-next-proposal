@@ -10,28 +10,41 @@ from messaging import msg
 from messaging import Kerr as error
 import composite
 
+attrs = ("type", "control", "min_temp", "max_temp")
 KELVIN_TO_CELSIUS = -273.15
 MAX_HEAT_TIME = 5.0
 AMBIENT_TEMP = 25.
 PID_PARAM_BASE = 255.
 
-attrs = ("type",)
-
 class Dummy(composite.Object):
-    def __init__(self, hal, tnode):
-        logging.warning("Dummy: %s", tnode.name)
-        self.hal = hal
-        self.node = tnode
+    def __init__(self, hal, node):
+        logging.warning("tcontrol.Dummy:__init__():%s", node.name)
+        composite.Object(hal, node)
     def init(self, sensor = None, heater = None, cooler = None):
+        pass
+    def register(self):
         pass
 
 class Object(composite.Object):
     def init(self):
+        self.thermometer = {}
+        self.hygrometer = {}
+        self.barometer = {}
+        self.heater = {}
+        self.cooler = {}
+        for t in self.sub_group_type(self.node, "sensor", "thermometer"):
+            pass
+        for h in self.sub_group_type(self.node, "sensor", "hygrometer"):
+            pass
+        for b in self.sub_group_type(self.node, "sensor", "barometer"):
+            pass
+        for h in self.sub_group(self.node, "heater"):
+            pass
+        for c in self.sub_group(self.node, "cooler"):
+            pass
+    def register(self):
         pass
-    def TODO(self, sensor = None, heater = None, cooler = None):
-        self.gcode = self.hal.get_gcode()
-        self.name = tnode.name.split()[-1]
-        # Setup sensor
+    def register_sensor(self):
         self.sensor = sensor
         self.min_temp = self.hal.getfloat(self.node, 'min_temp', minval=KELVIN_TO_CELSIUS)
         self.max_temp = self.hal.getfloat(self.node, 'max_temp', above=self.min_temp)
@@ -51,11 +64,12 @@ class Object(composite.Object):
         # pwm caching
         self.next_pwm_time = 0.
         self.last_pwm_value = 0.
-        # Setup control algorithm sub-class
+    def register_heater(self):
+        # governor
         algos = {'watermark': ControlBangBang, 'pid': ControlPID}
         algo = self.hal.getchoice(self.node, 'control', algos)
         self.control = algo(self, config)
-        # Setup output heater pin
+        # pin
         heater_pin = self.hal.get(self.node, 'heater_pin')
         ppins = self.hal.get_controller()
         if algo is ControlBangBang and self.max_power == 1.:
@@ -68,8 +82,8 @@ class Object(composite.Object):
         # Load additional modules
         #self.printer.try_load_module(config, "verify_heater %s" % (self.name,))
         #self.printer.try_load_module(config, "pid_calibrate")
-        self.gcode.register_mux_command("SET_HEATER_TEMPERATURE", "HEATER", self.name, self.cmd_SET_HEATER_TEMPERATURE, desc=self.cmd_SET_HEATER_TEMPERATURE_help)
-        return self
+    def register_cooler(self):
+        pass
     def set_pwm(self, read_time, value):
         if self.target_temp <= 0.:
             value = 0.
@@ -142,10 +156,6 @@ class Object(composite.Object):
             target_temp = self.target_temp
             smoothed_temp = self.smoothed_temp
         return {'temperature': smoothed_temp, 'target': target_temp}
-    cmd_SET_HEATER_TEMPERATURE_help = "Sets a heater temperature"
-    def cmd_SET_HEATER_TEMPERATURE(self, params):
-        temp = self.gcode.get_float('TARGET', params, 0.)
-        self.set_temp(temp)
 
 def load_node_object(hal, node):
     config_ok = True

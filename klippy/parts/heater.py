@@ -10,7 +10,7 @@ attrs = ("type", "pin",)
 
 class Object(part.Object):
     def configure(self):
-        pass
+        self.governor = None
 
 def load_node_object(hal, node):
     node.object = Object(hal, node)

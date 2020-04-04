@@ -14,13 +14,14 @@ class error(Exception):
     pass
 
 class Dummy(composite.Object):
-    def __init__(self, hal, enode):
-        logging.warning("Dummy: %s", enode.name)
-        self.hal = hal
-        self.node = enode
+    def __init__(self, hal, node):
+        composite.Object.__init__(self, hal, node)
+        logging.warning("parts.extruder.Dummy.__init__():%s", self.node.name)
 
 class Object(composite.Object):
     def init(self):
+        pass
+    def register(self):
         pass
 
 def load_node_object(hal, node):

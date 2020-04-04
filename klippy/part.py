@@ -5,8 +5,9 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
+import tree
 
-class Object:
+class Object(tree.PrinterNode):
     def __init__(self, hal, node):
         self.hal = hal
         self.node = node

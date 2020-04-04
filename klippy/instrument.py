@@ -199,14 +199,16 @@ attrs = ("x", "y", "z", "instrument", "max_velocity", "max_accel", "max_z_veloci
 
 class Dummy(composite.Object):
     def __init__(self, hal, node):
-        logging.warning("instrument.Dummy:__init__()")
-	composite.Object(hal, node)
+	composite.Object.__init__(self,hal, node)
+        logging.warning("instrument.Dummy:__init__():%s", self.node.name)
     def init(self):
-        logging.warning("instrument.Dummy:init()")
+        logging.warning("instrument.Dummy:init():%s", self.node.name)
+    def register(self):
+        pass
     def move(self, newpos, speed):
-        logging.warning("instrument.Dummy:move()")
+        logging.warning("instrument.Dummy:move():%s", self.node.name)
     def get_position(self):
-        logging.warning("instrument.Dummy:get_position()")
+        logging.warning("instrument.Dummy:get_position():%s", self.node.name)
 
 # Main code to track events (and their timing) on the printer toolhead
 class Object(composite.Object):
