@@ -20,10 +20,10 @@ class Manager:
         self.tree = tree.PrinterTree()
         self.tree.printer.module = printermod
         self.tree.printer.object = printerobj
-        self.tree.printer.set_child(tree.PrinterNode("hal"))
+        self.tree.printer.child_set(tree.PrinterNode("hal"))
         self.tree.printer.children["hal"].module = sys.modules[__name__]
         self.tree.printer.children["hal"].object = self
-        self.tree.printer.set_child(tree.PrinterNode("reactor"))
+        self.tree.printer.child_set(tree.PrinterNode("reactor"))
         self.get_node("reactor").object = reactor.Reactor(self, self.get_node("reactor"))
         self.pgroups = ["mcu", "sensor", "stepper", "heater", "cooler", "nozzle"]
         self.cgroups = ["rail", "tool", "cart"]
@@ -50,7 +50,7 @@ class Manager:
         logging.debug("\ttemperature")
         temperature.load_node_object(self, self.get_node("temperature"))
         # for each node, create its object
-        for node in self.tree.printer.list_children_deep(list(), self.tree.printer):
+        for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if not node.object:
                 # load object and check
                 if hasattr(node.module, "load_node_object") and callable(node.module.load_node_object):
@@ -83,7 +83,7 @@ class Manager:
                 else:
                     logging.debug("(ERROR) %s, no object", node.name)
         # configure toolhead(s)
-        for t in self.tree.printer.get_many_deep("toolhead ", list()): 
+        for t in self.tree.printer.children_deep_byname("toolhead ", list()): 
             t.children["gcode "+t.name.split(" ")[1]].object = t.children["gcode "+t.name.split(" ")[1]].module.Gcode(self, t.children["gcode "+t.name.split(" ")[1]])
             if isinstance(t.object, instrument.Object):
                 logging.info("- Building and configuring %s", t.name)
@@ -94,7 +94,7 @@ class Manager:
     def register_ec(self):
         logging.info("- Registering events and commands.")
         # for each node, run object.register()
-        for node in self.tree.printer.list_children_deep(list(), self.tree.printer):
+        for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if hasattr(node.object, "register") and callable(node.object.register):
                 logging.debug("\t%s", node.name)
                 node.object.register()
@@ -114,9 +114,9 @@ class Manager:
         elif name == "hal":
             return self
         else:
-            return self.tree.printer.get_first_deep(name)
-    def set_attr(self, nodename, attrname, value):
-        self.get_node(nodename).set_attr(attrname, value)
+            return self.tree.printer.child_get_first(name)
+    def attr_set(self, nodename, attrname, value):
+        self.get_node(nodename).attr_set(attrname, value)
     def get_attr(self, nodename, attrname):
         return self.get_node(nodename).attrs[attrname]
     def get_object(self, name):
@@ -132,7 +132,7 @@ class Manager:
             return self.get_node("gcode "+name).object
         else:
             logging.warning("(FIXME) No toolhead selected, returning first gcode in tree")
-            thnode = self.tree.printer.get_first_deep("toolhead ")
+            thnode = self.tree.printer.child_get_first("toolhead ")
             return thnode.children["gcode "+thnode.name.split(" ")[1]].object
     def get_controller(self):
         return self.get_node("controller").object
@@ -147,7 +147,7 @@ class Manager:
             return self.get_node("toolhead "+name).object
         else:
             logging.warning("(FIXME) No toolhead selected, returning first toolhead in tree")
-            self.tree.printer.get_first_deep("toolhead ")
+            self.tree.printer.child_get_first("toolhead ")
             return thnode.children["gcode "+thnode.name.split(" ")[1]].object
     def del_node(self, name):
         self.tree.printer.del_node(name)

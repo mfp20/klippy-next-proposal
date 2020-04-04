@@ -69,20 +69,12 @@ class MCU_stepper:
                 self._oid, self._step_pin, self._dir_pin,
                 self._mcu.seconds_to_clock(min_stop_interval),
                 self._invert_step))
-        self._mcu.add_config_cmd(
-            "reset_step_clock oid=%d clock=0" % (self._oid,), is_init=True)
-        step_cmd_id = self._mcu.lookup_command_id(
-            "queue_step oid=%c interval=%u count=%hu add=%hi")
-        dir_cmd_id = self._mcu.lookup_command_id(
-            "set_next_step_dir oid=%c dir=%c")
-        self._reset_cmd_id = self._mcu.lookup_command_id(
-            "reset_step_clock oid=%c clock=%u")
-        self._get_position_cmd = self._mcu.lookup_query_command(
-            "stepper_get_position oid=%c",
-            "stepper_position oid=%c pos=%i", oid=self._oid)
-        self._ffi_lib.stepcompress_fill(
-            self._stepqueue, self._mcu.seconds_to_clock(max_error),
-            self._invert_dir, step_cmd_id, dir_cmd_id)
+        self._mcu.add_config_cmd("reset_step_clock oid=%d clock=0" % (self._oid,), is_init=True)
+        step_cmd_id = self._mcu.lookup_command_id("queue_step oid=%c interval=%u count=%hu add=%hi")
+        dir_cmd_id = self._mcu.lookup_command_id("set_next_step_dir oid=%c dir=%c")
+        self._reset_cmd_id = self._mcu.lookup_command_id("reset_step_clock oid=%c clock=%u")
+        self._get_position_cmd = self._mcu.lookup_query_command("stepper_get_position oid=%c", "stepper_position oid=%c pos=%i", oid=self._oid)
+        self._ffi_lib.stepcompress_fill(self._stepqueue, self._mcu.seconds_to_clock(max_error), self._invert_dir, step_cmd_id, dir_cmd_id)
     def get_oid(self):
         return self._oid
     def get_step_dist(self):
@@ -170,11 +162,11 @@ class Object(part.Object):
     def configure(self):
         pass
     def get(self, units_in_radians=False):
-        step_pin = self.node.get("pin_step")
+        step_pin = self.node.attr_get("pin_step")
         step_pin_params = self.hal.get_controller().pin_register(step_pin, can_invert=True)
-        dir_pin = self.node.get("pin_dir")
+        dir_pin = self.node.attr_get("pin_dir")
         dir_pin_params = self.hal.get_controller().pin_register(dir_pin, can_invert=True)
-        step_dist = self.node.get_float('step_distance', above=0.)
+        step_dist = self.node.attr_get_float('step_distance', above=0.)
         mcu_stepper = MCU_stepper(self.node.name, step_pin_params, dir_pin_params, step_dist, units_in_radians)
         # Support for stepper enable pin handling
         #stepper_enable = printer.try_load_module(config, 'stepper_enable')

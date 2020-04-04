@@ -32,15 +32,15 @@ class Object(composite.Object):
         self.barometer = {}
         self.heater = {}
         self.cooler = {}
-        for t in self.sub_group_type(self.node, "sensor", "thermometer"):
+        for t in self.children_bytype("sensor", "thermometer"):
             pass
-        for h in self.sub_group_type(self.node, "sensor", "hygrometer"):
+        for h in self.children_bytype("sensor", "hygrometer"):
             pass
-        for b in self.sub_group_type(self.node, "sensor", "barometer"):
+        for b in self.children_bytype("sensor", "barometer"):
             pass
-        for h in self.sub_group(self.node, "heater"):
+        for h in self.children_bygroup("heater"):
             pass
-        for c in self.sub_group(self.node, "cooler"):
+        for c in self.children_bygroup("cooler"):
             pass
     def register(self):
         pass

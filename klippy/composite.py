@@ -5,25 +5,34 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
+from messaging import msg
+from messaging import Kerr as error
 import part
 
 class Object(part.Object):
     def __init__(self, hal, node):
         part.Object.__init__(self,hal,node)
-    def subs(self):
-        return root.list_children_deep(list(), self.node)
-    def sub_group(self, root, group):
-        return root.get_many_deep(group+" ", list(), root)
-    def sub_group_type(self, r, g, t):
+    def children_bygroup(self, group):
+        return self.node.children_list(group+" ")
+    def children_bytype(self, group, typ):
         parts = list()
-        for p in self.sub_group(r, g):
+        for p in self.children_bygroup(group):
             if "type" in p.attrs:
-                if p.attrs["type"] == t:
+                if p.attrs["type"] == typ:
+                    parts.append(p)
+        return parts
+    def children_deep_bygroup(self, group):
+        return root.children_deep(group+" ", list(), self.node)
+    def children_deep_bytype(self, group, typ):
+        parts = list()
+        for p in self.children_deep_bygroup(group):
+            if "type" in p.attrs:
+                if p.attrs["type"] == typ:
                     parts.append(p)
         return parts
     def build(self, indent = 1):
         # for each child
-        for c in self.node.list_children():
+        for c in self.node.children_list():
             # build its children
             if hasattr(c.object, "build") and callable(c.object.build):
                 if c.name not in self.hal.ready_composite:

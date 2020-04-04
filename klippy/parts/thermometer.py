@@ -371,17 +371,17 @@ class Object(sensor.Object):
         params["model"] = self.node.attrs["model"]
         # thermistor sensor
         if self.node.attrs["model"] in thermistor:
-            params["pullup"] = self.node.get_float("pullup", 4700., above=0.)
-            params["inline"] = self.node.get_float("inline", 0., minval=0.)
+            params["pullup"] = self.node.attr_get_float("pullup", default=4700., above=0.)
+            params["inline"] = self.node.attr_get_float("inline", default=0., minval=0.)
             params["params"] = thermistor[self.node.attrs["model"]]
             self.sensor = ADC(params)
         # adc sensor
         elif self.node.attrs["model"] in adc:
             if "pullup" in self.node.attrs:
-                params["pullup"] = self.node.get_float('pullup', 4700., above=0.)
+                params["pullup"] = self.node.attr_get_float("pullup", above=0., default=4700.)
             else: 
-                params["voltage"] = self.node.get_float('voltage', 5., above=0.)
-                params["offset"] = self.node.get_float('offset', 0.0)
+                params["voltage"] = self.node.attr_get_float("voltage", above=0., default=5.)
+                params["offset"] = self.node.attr_get_float("offset", default=0.0)
             params["params"] = adc[self.node.attrs["model"]]
             self.sensor = ADC(params)
         # i2c digital sensor
@@ -394,20 +394,20 @@ class Object(sensor.Object):
         elif self.node.attrs["model"].startswith("custom "):
             name = node.attrs["model"].split(" ")
             if name[1] == "thermistor":
-                params["pullup"] = self.node.get_float("pullup", 4700., above=0.)
-                params["inline"] = self.node.get_float("inline", 0., minval=0.)
+                params["pullup"] = self.node.attr_get_float("pullup", 4700., above=0.)
+                params["inline"] = self.node.attr_get_float("inline", 0., minval=0.)
                 # get samples
-                t1 = self.node.get_float("t1", minval=KELVIN_TO_CELSIUS)
-                r1 = self.node.get_float("r1", minval=0.)
+                t1 = self.node.attr_get_float("t1", minval=KELVIN_TO_CELSIUS)
+                r1 = self.node.attr_get_float("r1", minval=0.)
                 if "beta" in self.node.attrs:
-                    beta = node.get_float("beta", None, above=0.)
+                    beta = node.attr_get_float("beta", None, above=0.)
                     if beta is not None:
                         self.params = {'t1': t1, 'r1': r1, 'beta': beta}
                         return
-                t2 = node.get_float("t2", minval=KELVIN_TO_CELSIUS)
-                r2 = node.get_float("r2", minval=0.)
-                t3 = node.get_float("t3", minval=KELVIN_TO_CELSIUS)
-                r3 = node.get_float("r3", minval=0.)
+                t2 = node.attr_get_float("t2", minval=KELVIN_TO_CELSIUS)
+                r2 = node.attr_get_float("r2", minval=0.)
+                t3 = node.attr_get_float("t3", minval=KELVIN_TO_CELSIUS)
+                r3 = node.attr_get_float("r3", minval=0.)
                 (t1, r1), (t2, r2), (t3, r3) = sorted([(t1, r1), (t2, r2), (t3, r3)])
                 params["params"] = {'t1': t1, 'r1': r1, 't2': t2, 'r2': r2, 't3': t3, 'r3': r3}
                 self.sensor = ADC(params)
@@ -415,18 +415,18 @@ class Object(sensor.Object):
                 self.key = ""
                 if "pullup" in self.node.attrs:
                     self.key = "r"
-                    params["pullup"] = self.node.get_float('pullup', 4700., above=0.)
+                    params["pullup"] = self.node.attr_get_float('pullup', 4700., above=0.)
                 else: 
                     self.key = "v"
-                    params["voltage"] = self.node.get_float('voltage', 5., above=0.)
-                    params["offset"] = self.node.get_float('offset', 0.0)
+                    params["voltage"] = self.node.attr_get_float('voltage', 5., above=0.)
+                    params["offset"] = self.node.attr_get_float('offset', 0.0)
                 # get samples
                 params["params"] = []
                 for i in range(1, 1000):
-                    t = self.node.get_float("t%d" % (i,), None)
+                    t = self.node.attr_get_float("t%d" % (i,), None)
                     if t is None:
                         break
-                    v = self.node.get_float(self.key+"%d" % (i,))
+                    v = self.node.attr_get_float(self.key+"%d" % (i,))
                     params["params"].append((t, v))
                 self.sensor = ADC(params)
             elif name[1] == "i2c":
@@ -434,7 +434,7 @@ class Object(sensor.Object):
             elif name[1] == "spi":
                 self.sensor = SPI(params)
         # register thermometer
-        self.mcu_adc = self.hal.get_controller().pin_setup("adc", self.node.get("pin"))
+        self.mcu_adc = self.hal.get_controller().pin_setup("adc", self.node.attr_get("pin"))
         self.mcu_adc.setup_adc_callback(REPORT_TIME, self.adc_callback)
     def setup_callback(self, temperature_callback):
         self.temperature_callback = temperature_callback

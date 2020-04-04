@@ -34,12 +34,12 @@ class Object(composite.Object):
         self.steppers = []
         self.endstops = []
         # steppers
-        for s in self.node.object.sub_group(self.node, "stepper"):
+        for s in self.node.object.children_bygroup("stepper"):
             self.steppers.append(s.object.get(self.stepper_units_in_radians))
         # endstops
         for e in ["sensor_min", "sensor_max", "sensor_level"]:
             if e in self.node.attrs:
-                en = self.node.get_first_deep("sensor "+self.node.attrs[e])
+                en = self.node.child_get_first("sensor "+self.node.attrs[e])
                 if en:
                     self.endstops.append(en.object.get(e, en.attrs["pin"], self.steppers))
                 else:
@@ -56,13 +56,13 @@ class Object(composite.Object):
         if hasattr(mcu_endstop, "get_position_endstop"):
             self.position_endstop = mcu_endstop.get_position_endstop()
         elif default_position_endstop is None:
-            self.position_endstop = self.node.get_float('position_endstop')
+            self.position_endstop = self.node.attr_get_float('position_endstop_min')
         else:
-            self.position_endstop = self.node.get_float('position_endstop', default_position_endstop)
+            self.position_endstop = self.node.attr_get_float('position_endstop_min', default=default_position_endstop)
         # Axis range
         if need_position_minmax:
-            self.position_min = self.node.get_float('position_min', 0.)
-            self.position_max = self.node.get_float('position_max', above=self.position_min)
+            self.position_min = self.node.attr_get_float('position_min', default=0.)
+            self.position_max = self.node.attr_get_float('position_max', above=self.position_min)
         else:
             self.position_min = 0.
             self.position_max = self.position_endstop
@@ -72,11 +72,11 @@ class Object(composite.Object):
             #    "position_endstop in section '%s' must be between"
             #    " position_min and position_max" % config.get_name())
         # Homing mechanics
-        self.homing_speed = self.node.get_float('homing_speed', 5.0, above=0.)
-        self.second_homing_speed = self.node.get_float('second_homing_speed', self.homing_speed/2., above=0.)
-        self.homing_retract_speed = self.node.get_float('homing_retract_speed', self.homing_speed, above=0.)
-        self.homing_retract_dist = self.node.get_float('homing_retract_dist', 5., minval=0.)
-        self.homing_positive_dir = self.node.get_boolean('homing_positive_dir', None)
+        self.homing_speed = self.node.attr_get_float('homing_speed', default=5.0, above=0.)
+        self.second_homing_speed = self.node.attr_get_float('second_homing_speed', default=self.homing_speed/2., above=0.)
+        self.homing_retract_speed = self.node.attr_get_float('homing_retract_speed', default=self.homing_speed, above=0.)
+        self.homing_retract_dist = self.node.attr_get_float('homing_retract_dist', default=5., minval=0.)
+        self.homing_positive_dir = self.node.attr_get('homing_positive_dir', True, default=False)
         if self.homing_positive_dir is None:
             axis_len = self.position_max - self.position_min
             if self.position_endstop <= self.position_min + axis_len / 4.:

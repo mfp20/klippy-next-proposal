@@ -660,16 +660,16 @@ class MCU:
         self.hal.get_printer().register_event_handler("klippy:shutdown", self._shutdown)
         self.hal.get_printer().register_event_handler("klippy:disconnect", self._disconnect)
         # Serial port
-        self._serialport = boardnode.get('serial', '/dev/ttyS0')
+        self._serialport = boardnode.attr_get("serial", False, "/dev/ttyS0")
         baud = 0
         if not (self._serialport.startswith("/dev/rpmsg_") or self._serialport.startswith("/tmp/klipper_host_")):
-            baud = boardnode.get_int('baud', 250000, minval=2400)
+            baud = boardnode.attr_get_int("baud", 2400, maxval=250000, default=250000)
         self._serial = serialhdl.SerialReader(self._reactor, self._serialport, baud)
         # Restarts
-        self._restart_method = 'command'
+        self._restart_method = "command"
         if baud:
-            rmethods = {m: m for m in [None, 'arduino', 'command', 'rpi_usb']}
-            self._restart_method = boardnode.get_choice('restart_method', rmethods, None)
+            rmethods = {m: m for m in [None, "arduino", "command", "rpi_usb"]}
+            self._restart_method = boardnode.attr_get_choice("restart_method", rmethods, None)
         self._reset_cmd = self._config_reset_cmd = None
         self._emergency_stop_cmd = None
         self._is_shutdown = self._is_timeout = False
@@ -679,12 +679,12 @@ class MCU:
         self._config_callbacks = []
         self._init_cmds = []
         self._config_cmds = []
-        self._pin_map = boardnode.get('pin_map', None)
-        self._custom = boardnode.get('custom', '')
+        self._pin_map = boardnode.attr_get("pin_map")
+        self._custom = boardnode.attr_get("custom")
         self._mcu_freq = 0.
         # Move command queuing
         ffi_main, self._ffi_lib = chelper.get_ffi()
-        self._max_stepper_error = boardnode.get_float('max_stepper_error', 0.000025, minval=0.)
+        self._max_stepper_error = boardnode.attr_get_float("max_stepper_error", minval=0., default=0.000025)
         self._stepqueues = []
         self._steppersync = None
         # Stats
@@ -1000,20 +1000,20 @@ class MCU:
 # Board := {mcu, pins, ...}
 ######################################################################
 
-attrs = ("serial", "baud", "pin_map", "restart_method")
+ATTRS = ("serial", "baud", "pin_map", "restart_method")
 class Board(part.Object):
     def init(self):
         # pin
         self.pin = Pin(self.hal, self.node)
         # mcu
-        if self.check_attrs():
+        if self.node.attrs_check():
             if self.hal.mcu_count == 0:
                 self.mcu = MCU(self.hal, self.node, self.hal.get_timing())
             else:
                 self.mcu = MCU(self.hal, self.node, timing.Secondary(self.hal.get_reactor(), self.hal.get_timing()))
         else:
             self.mcu = DummyMCU(self.hal, self.node)
-            self.node.set_attr("dummy", True)
+            self.node.attr_set("dummy", True)
         self.hal.mcu_count = self.hal.mcu_count + 1
         self.hal.get_printer().register_event_handler("board:"+self.node.name.split(" ")[1]+":configured", self.mcu_ready)
     def mcu_ready(self):

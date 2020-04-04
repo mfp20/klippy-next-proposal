@@ -20,7 +20,7 @@ class Object(part.Object):
         for a in ["x", "y", "z"]:
             rr = list()
             for r in thnode.attrs[a].split(","):
-                rr.append(thnode.get_first_deep("rail "+r))
+                rr.append(thnode.child_get_first("rail "+r))
             railnodes[a] = rr
         self.rails = [railnodes["x"][0].object.get(), railnodes["y"][0].object.get(), railnodes["z"][0].object.get()]
         for rail, axis in zip(self.rails, "xyz"):
@@ -31,8 +31,8 @@ class Object(part.Object):
         self.hal.get_printer().register_event_handler("stepper_enable:motor_off", self._motor_off)
         # setup boundary checks
         max_velocity, max_accel = toolhead.get_max_velocity()
-        self.max_z_velocity = self.node.get_float("max_z_velocity", max_velocity, above=0., maxval=max_velocity)
-        self.max_z_accel = self.node.get_float("max_z_accel", max_accel, above=0., maxval=max_accel)
+        self.max_z_velocity = self.node.attr_get_float("max_z_velocity", default=max_velocity, above=0., maxval=max_velocity)
+        self.max_z_accel = self.node.attr_get_float("max_z_accel", default=max_accel, above=0., maxval=max_accel)
         self.limits = [(1.0, -1.0)] * 3
         # setup stepper max halt velocity
         max_halt_velocity = toolhead.get_max_axis_halt()

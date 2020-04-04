@@ -224,21 +224,21 @@ class Object(composite.Object):
         self.commanded_pos = [0., 0., 0., 0.]
         self.hal.get_printer().register_event_handler("klippy:shutdown", self._handle_shutdown)
         # Velocity and acceleration control
-        self.max_velocity = self.node.get_float('max_velocity', above=0.)
-        self.max_accel = self.node.get_float('max_accel', above=0.)
-        self.requested_accel_to_decel = self.node.get_float('max_accel_to_decel', self.max_accel * 0.5, above=0.)
+        self.max_velocity = self.node.attr_get_float('max_velocity', above=0.)
+        self.max_accel = self.node.attr_get_float('max_accel', above=0.)
+        self.requested_accel_to_decel = self.node.attr_get_float('max_accel_to_decel', default=self.max_accel * 0.5, above=0.)
         self.max_accel_to_decel = self.requested_accel_to_decel
-        self.square_corner_velocity = self.node.get_float('square_corner_velocity', 5., minval=0.)
+        self.square_corner_velocity = self.node.attr_get_float('square_corner_velocity', default=5., minval=0.)
         self.config_max_velocity = self.max_velocity
         self.config_max_accel = self.max_accel
         self.config_square_corner_velocity = self.square_corner_velocity
         self.junction_deviation = 0.
         self._calc_junction_deviation()
         # Print time tracking
-        self.buffer_time_low = self.node.get_float('buffer_time_low', 1.000, above=0.)
-        self.buffer_time_high = self.node.get_float('buffer_time_high', 2.000, above=self.buffer_time_low)
-        self.buffer_time_start = self.node.get_float('buffer_time_start', 0.250, above=0.)
-        self.move_flush_time = self.node.get_float('move_flush_time', 0.050, above=0.)
+        self.buffer_time_low = self.node.attr_get_float('buffer_time_low', default=1.000, above=0.)
+        self.buffer_time_high = self.node.attr_get_float('buffer_time_high', default=2.000, above=self.buffer_time_low)
+        self.buffer_time_start = self.node.attr_get_float('buffer_time_start', default=0.250, above=0.)
+        self.move_flush_time = self.node.attr_get_float('move_flush_time', default=0.050, above=0.)
         self.print_time = 0.
         self.special_queuing_state = "Flushed"
         self.need_check_stall = -1.
@@ -262,7 +262,7 @@ class Object(composite.Object):
         self.extruder = extruder.DummyExtruder()
         kin_name = self.node.attrs["kinematics"]
         #try:
-	self.kin = self.node.get_first_deep("kinematic ").object.get(self.node)
+	self.kin = self.node.child_get_first("kinematic ").object.get(self.node)
         #except config.error as e:
         #    raise
         #except hal.tree.printer.children["pins"].object.error as e:
@@ -589,30 +589,30 @@ def load_tree_node(hal, thnode, parts):
     knode = thnode.children["kinematic"]
     for a in hal.tree.printer.attrs:
         if a == "kinematics":
-            knode.set_attr(a, hal.tree.printer.attrs.pop(a))
+            knode.attr_set(a, hal.tree.printer.attrs.pop(a))
         elif a == "x":
             for r in hal.tree.printer.attrs[a].split(","):
                 if r != "none":
-                    thnode.set_child(parts.pop("rail "+r))
-            thnode.set_attr(a, hal.tree.printer.attrs.pop(a))
+                    thnode.child_set(parts.pop("rail "+r))
+            thnode.attr_set(a, hal.tree.printer.attrs.pop(a))
             if len(thnode.attrs[a].split(",")) > 1:
                 knode.attrs["dualcarriage"] = a
         elif a == "y":
             if hal.tree.printer.attrs[a] != "none":
-                thnode.set_child(parts.pop("rail "+hal.tree.printer.attrs[a]))
-            thnode.set_attr(a, hal.tree.printer.attrs.pop(a))
+                thnode.child_set(parts.pop("rail "+hal.tree.printer.attrs[a]))
+            thnode.attr_set(a, hal.tree.printer.attrs.pop(a))
             if len(thnode.attrs[a].split(",")) > 1:
                 knode.attrs["dualcarriage"] = a
         elif a == "z":
             if hal.tree.printer.attrs[a] != "none":
-                thnode.set_child(parts.pop("rail "+hal.tree.printer.attrs[a]))
-            thnode.set_attr(a, hal.tree.printer.attrs.pop(a))
+                thnode.child_set(parts.pop("rail "+hal.tree.printer.attrs[a]))
+            thnode.attr_set(a, hal.tree.printer.attrs.pop(a))
             if len(thnode.attrs[a].split(",")) > 1:
                 knode.attrs["dualcarriage"] = a
         elif a == "instrument":
             if hal.tree.printer.attrs[a] != "none":
                 for p in hal.tree.printer.attrs[a].split(","):
-                    thnode.set_child(parts.pop("cart "+p))
+                    thnode.child_set(parts.pop("cart "+p))
                     if a in thnode.attrs:
                         carts = thnode.attrs[a]
                         carts = carts+","
@@ -622,11 +622,11 @@ def load_tree_node(hal, thnode, parts):
             else:
                 carts = "none"
                 hal.tree.printer.attrs.pop(a)
-            thnode.set_attr(a, carts)
+            thnode.attr_set(a, carts)
         else:
             if a in attrs:
-                thnode.set_attr(a, hal.tree.printer.attrs.pop(a))
-    thnode.set_child(knode)
+                thnode.attr_set(a, hal.tree.printer.attrs.pop(a))
+    thnode.child_set(knode)
     return used_parts
 
 def load_node_object(hal, node):

@@ -25,7 +25,7 @@ class Composer:
                 for k in s.fileconfig.options(s.get_name()):
                     for a in s.get(k).split(","):
                         if a != "none":
-                            part.set_attr(k, a)
+                            part.attr_set(k, a)
                 if p == "mcu":
                     part.module = importlib.import_module("controller")
                 elif p == "sensor":
@@ -58,10 +58,10 @@ class Composer:
             parts[c] = composites[c]
         del(composites)
         # build tree: basic modules and parts
-        hal.get_node("printer").set_child(tree.PrinterNode("commander"))
-        hal.get_node("printer").set_child(tree.PrinterNode("controller"))
-        hal.get_node("controller").set_child(tree.PrinterNode("timing"))
-        hal.get_node("controller").set_child(tree.PrinterNode("temperature"))
+        hal.get_node("printer").child_set(tree.PrinterNode("commander"))
+        hal.get_node("printer").child_set(tree.PrinterNode("controller"))
+        hal.get_node("controller").child_set(tree.PrinterNode("timing"))
+        hal.get_node("controller").child_set(tree.PrinterNode("temperature"))
         for n in ["reactor", "commander", "controller", "timing", "temperature"]:
             hal.get_node(n).module = importlib.import_module(n)
         # adding parts and composites nodes.
@@ -96,27 +96,27 @@ class Composer:
                 for p in section[0].get(o).split(","):
                     if p != "none":
                         if o+" "+p in parts:
-                            composite.set_child(parts.pop(o+" "+p))
+                            composite.child_set(parts.pop(o+" "+p))
             elif o == "sensor_min" or o == "sensor_max" or o == "sensor_level":
                 for p in section[0].get(o).split(","):
                     if "sensor "+p in parts:
-                        composite.set_child(parts.pop("sensor "+p))
-                    composite.set_attr(o, section[0].get(o))
+                        composite.child_set(parts.pop("sensor "+p))
+                    composite.attr_set(o, section[0].get(o))
             elif o not in self.cgroups:
-                composite.set_attr(o, section[0].get(o))
+                composite.attr_set(o, section[0].get(o))
             else:
                 for p in section[0].get(o).split(","):
                     if p != "none":
                         if o+" "+p in composites:
-                            composite.set_child(self.compose(composites.pop(o+" "+p), config, parts, composites))
+                            composite.child_set(self.compose(composites.pop(o+" "+p), config, parts, composites))
         return composite
     def compose_toolhead(self, config, parts):
         name = config.get_name()
         toolhead = tree.PrinterNode(name)
         toolhead.module = importlib.import_module("instrument")
-        toolhead.set_child(tree.PrinterNode("gcode "+name.split(" ")[1]))
+        toolhead.child_set(tree.PrinterNode("gcode "+name.split(" ")[1]))
         toolhead.children["gcode "+name.split(" ")[1]].module = self.hal.get_node("commander").module
-        toolhead.set_child(tree.PrinterNode("kinematic "+name.split(" ")[1]))
+        toolhead.child_set(tree.PrinterNode("kinematic "+name.split(" ")[1]))
         toolhead.children["kinematic "+name.split(" ")[1]].module = importlib.import_module('kinematics.' + config.getsection(name).get("kinematics"))
         for a in config.getsection(name).fileconfig.options(name):
             toolhead.attrs[a] = config.getsection(name).get(a)
