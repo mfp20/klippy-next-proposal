@@ -4,7 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, logging.handlers
+import logging, logging.handlers, threading, Queue, time
 
 # Class to forward all messages through a queue to a background thread
 class QueueHandler(logging.Handler):

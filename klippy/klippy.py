@@ -6,7 +6,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import optparse, logging, time, sys
-import util, printer
+import util, printer, queuelogger
 
 def arg_dictionary(option, opt_str, value, parser):
     key, fname = "dictionary", value
