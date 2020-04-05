@@ -13,6 +13,7 @@ import logging, math
 from messaging import msg
 from messaging import Kerr as error
 import composite, chelper
+from kinematics import dummy
 from kinematics import extruder
 
 
@@ -195,14 +196,16 @@ DRIP_TIME = 0.100
 class DripModeEndSignal(Exception):
     pass
 
-attrs = ("x", "y", "z", "instrument", "max_velocity", "max_accel", "max_z_velocity", "max_z_accel")
+ATTRS = ("x", "y", "z", "max_velocity", "max_accel", "max_z_velocity", "max_z_accel")
 
 class Dummy(composite.Object):
     def __init__(self, hal, node):
 	composite.Object.__init__(self,hal, node)
         logging.warning("instrument.Dummy:__init__():%s", self.node.name)
+        knode = self.hal.tree.printer.children["kinematic "+self.node.get_id()]
+        knode.object = dummy.Object(self.hal, knode)
     def init(self):
-        logging.warning("instrument.Dummy:init():%s", self.node.name)
+        self.ready = True
     def register(self):
         pass
     def move(self, newpos, speed):
@@ -213,7 +216,10 @@ class Dummy(composite.Object):
 # Main code to track events (and their timing) on the printer toolhead
 class Object(composite.Object):
     def init(self):
-        self.gcode = self.hal.get_gcode(self.node.name.split(" ")[1])
+        if self.ready:
+            return
+        self.gcode = self.hal.get_gcode(self.node.get_id())
+        self.kin = self.hal.get_kinematic(self.node.get_id())
         self.reactor = self.hal.get_reactor()
         self.all_mcus = self.hal.get_controller().list_mcus()
         self.mcu = self.all_mcus[0]
@@ -222,7 +228,6 @@ class Object(composite.Object):
             self.can_pause = False
         self.move_queue = MoveQueue(self)
         self.commanded_pos = [0., 0., 0., 0.]
-        self.hal.get_printer().register_event_handler("klippy:shutdown", self._handle_shutdown)
         # Velocity and acceleration control
         self.max_velocity = self.node.attr_get_float('max_velocity', above=0.)
         self.max_accel = self.node.attr_get_float('max_accel', above=0.)
@@ -260,24 +265,14 @@ class Object(composite.Object):
         self.step_generators = []
         # Create kinematics class
         self.extruder = extruder.DummyExtruder()
-        kin_name = self.node.attrs["kinematics"]
-        #try:
-	self.kin = self.node.child_get_first("kinematic ").object.get(self.node)
-        #except config.error as e:
-        #    raise
-        #except hal.tree.printer.children["pins"].object.error as e:
-        #    raise
-        #except:
-        #    msg = "Error loading kinematics '%s'" % (kin_name,)
-        #    logging.exception(msg)
-        #    raise config.error(msg)
-        # SET_VELOCITY_LIMIT command
         # Load some default modules
         #self.printer.try_load_module(config, "idle_timeout")
         #self.printer.try_load_module(config, "statistics")
         #self.printer.try_load_module(config, "manual_probe")
         #self.printer.try_load_module(config, "tuning_tower")
+        self.ready = True
     def register(self):
+        self.hal.get_printer().register_event_handler("klippy:shutdown", self._handle_shutdown)
         self.gcode.register_command('SET_VELOCITY_LIMIT', self.cmd_SET_VELOCITY_LIMIT, True, desc=self.cmd_SET_VELOCITY_LIMIT_help)
         self.gcode.register_command('M204', self.cmd_M204, True)
     # Print time tracking
@@ -547,19 +542,14 @@ class Object(composite.Object):
     cmd_SET_VELOCITY_LIMIT_help = "Set default acceleration"
     def cmd_SET_VELOCITY_LIMIT(self, params):
         print_time = self.get_last_move_time()
-        gcode = self.node.get__gcode()
-        max_velocity = gcode.get_float('VELOCITY', params, self.max_velocity,
-                                       above=0.)
+        gcode = self.node.get_gcode(self.node.get_id())
+        max_velocity = gcode.get_float('VELOCITY', params, self.max_velocity, above=0.)
         max_accel = gcode.get_float('ACCEL', params, self.max_accel, above=0.)
-        square_corner_velocity = gcode.get_float(
-            'SQUARE_CORNER_VELOCITY', params, self.square_corner_velocity,
-            minval=0.)
-        self.requested_accel_to_decel = gcode.get_float(
-            'ACCEL_TO_DECEL', params, self.requested_accel_to_decel, above=0.)
+        square_corner_velocity = gcode.get_float('SQUARE_CORNER_VELOCITY', params, self.square_corner_velocity, minval=0.)
+        self.requested_accel_to_decel = gcode.get_float('ACCEL_TO_DECEL', params, self.requested_accel_to_decel, above=0.)
         self.max_velocity = min(max_velocity, self.config_max_velocity)
         self.max_accel = min(max_accel, self.config_max_accel)
-        self.square_corner_velocity = min(square_corner_velocity,
-                                          self.config_square_corner_velocity)
+        self.square_corner_velocity = min(square_corner_velocity, self.config_square_corner_velocity)
         self._calc_junction_deviation()
         msg = ("max_velocity: %.6f\n"
                "max_accel: %.6f\n"
@@ -584,54 +574,9 @@ class Object(composite.Object):
         self.max_accel = min(accel, self.config_max_accel)
         self._calc_junction_deviation()
 
-def load_tree_node(hal, thnode, parts):
-    used_parts = list()
-    knode = thnode.children["kinematic"]
-    for a in hal.tree.printer.attrs:
-        if a == "kinematics":
-            knode.attr_set(a, hal.tree.printer.attrs.pop(a))
-        elif a == "x":
-            for r in hal.tree.printer.attrs[a].split(","):
-                if r != "none":
-                    thnode.child_set(parts.pop("rail "+r))
-            thnode.attr_set(a, hal.tree.printer.attrs.pop(a))
-            if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dualcarriage"] = a
-        elif a == "y":
-            if hal.tree.printer.attrs[a] != "none":
-                thnode.child_set(parts.pop("rail "+hal.tree.printer.attrs[a]))
-            thnode.attr_set(a, hal.tree.printer.attrs.pop(a))
-            if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dualcarriage"] = a
-        elif a == "z":
-            if hal.tree.printer.attrs[a] != "none":
-                thnode.child_set(parts.pop("rail "+hal.tree.printer.attrs[a]))
-            thnode.attr_set(a, hal.tree.printer.attrs.pop(a))
-            if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dualcarriage"] = a
-        elif a == "instrument":
-            if hal.tree.printer.attrs[a] != "none":
-                for p in hal.tree.printer.attrs[a].split(","):
-                    thnode.child_set(parts.pop("cart "+p))
-                    if a in thnode.attrs:
-                        carts = thnode.attrs[a]
-                        carts = carts+","
-                    else:
-                        carts = ""
-                carts = carts+hal.tree.printer.attrs.pop(a)
-            else:
-                carts = "none"
-                hal.tree.printer.attrs.pop(a)
-            thnode.attr_set(a, carts)
-        else:
-            if a in attrs:
-                thnode.attr_set(a, hal.tree.printer.attrs.pop(a))
-    thnode.child_set(knode)
-    return used_parts
-
 def load_node_object(hal, node):
     config_ok = True
-    for a in node.module.attrs:
+    for a in node.module.ATTRS:
         if a not in node.attrs:
             config_ok = False
             break

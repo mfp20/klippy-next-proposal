@@ -5,16 +5,15 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging, math
+from messaging import msg
+from messaging import Kerr as error
 import part, chelper
 
 attrs = ("type",)
 
-class error(Exception):
-    pass
-
 # Interface to low-level mcu and chelper code
 class MCU_stepper:
-    def __init__(self, name, step_pin_params, dir_pin_params, step_dist, units_in_radians=False):
+    def __init__(self, name, step_pin_params, dir_pin_params, step_dist, units_in_radians = False):
         self._name = name
         self._step_dist = step_dist
         self._units_in_radians = units_in_radians
@@ -44,9 +43,12 @@ class MCU_stepper:
         if short and self._name.startswith('stepper_'):
             return self._name[8:]
         return self._name
-    def units_in_radians(self):
-        # Returns true if distances are in radians instead of millimeters
-        return self._units_in_radians
+    # get/set if distances in radians instead of millimeters
+    def units_in_radians(self, value = False):
+        if value:
+            self._units_in_radians = True
+        else:
+            return self._units_in_radians
     def _dist_to_time(self, dist, start_velocity, accel):
         # Calculate the time it takes to travel a distance with constant accel
         time_offset = start_velocity / accel
@@ -160,21 +162,19 @@ class Dummy(part.Object):
 # Helper code to build a stepper object from hal
 class Object(part.Object):
     def configure(self):
-        pass
-    def get(self, units_in_radians=False):
-        step_pin = self.node.attr_get("pin_step")
-        step_pin_params = self.hal.get_controller().pin_register(step_pin, can_invert=True)
-        dir_pin = self.node.attr_get("pin_dir")
-        dir_pin_params = self.hal.get_controller().pin_register(dir_pin, can_invert=True)
-        step_dist = self.node.attr_get_float('step_distance', above=0.)
-        mcu_stepper = MCU_stepper(self.node.name, step_pin_params, dir_pin_params, step_dist, units_in_radians)
+        if self.ready:
+            return
+        self.step_pin_params = self.hal.get_controller().pin_register(self.node.attr_get("pin_step"), can_invert=True)
+        self.dir_pin_params = self.hal.get_controller().pin_register(self.node.attr_get("pin_dir"), can_invert=True)
+        self.step_dist = self.node.attr_get_float("step_distance", above=0.)
+        self.stepper = MCU_stepper(self.node.name, self.step_pin_params, self.dir_pin_params, self.step_dist)
         # Support for stepper enable pin handling
         #stepper_enable = printer.try_load_module(config, 'stepper_enable')
         #stepper_enable.register_stepper(mcu_stepper, self.node.get('enable_pin', None))
         # Register STEPPER_BUZZ command
         #force_move = printer.try_load_module(config, 'force_move')
         #force_move.register_stepper(mcu_stepper)
-        return mcu_stepper
+        self.ready = True
 
 def load_node_object(hal, node):
     node.object = Object(hal, node)

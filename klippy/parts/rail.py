@@ -6,12 +6,11 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging, collections
+from messaging import msg
+from messaging import Kerr as error
 import composite
 
-attrs = ("position_min", "position_endstop_min", "position_max")
-
-class error(Exception):
-    pass
+ATTRS = ("position_min", "position_endstop_min", "position_max")
 
 class Dummy(composite.Object):
     def __init__(self, hal, rnode):
@@ -28,20 +27,25 @@ class Dummy(composite.Object):
 # A motor control "rail" with one (or more) steppers and one (or more) endstops.
 class Object(composite.Object):
     def init(self):
-        pass
-    def get(self, need_position_minmax=True, default_position_endstop=None, units_in_radians=False):
-        self.stepper_units_in_radians = units_in_radians
+        if self.ready:
+            return
         self.steppers = []
         self.endstops = []
+        self.need_position_minmax = True
+        self.default_position_endstop = None
         # steppers
         for s in self.node.object.children_bygroup("stepper"):
-            self.steppers.append(s.object.get(self.stepper_units_in_radians))
+            self.steppers.append(s.object.stepper)
         # endstops
         for e in ["sensor_min", "sensor_max", "sensor_level"]:
             if e in self.node.attrs:
                 en = self.node.child_get_first("sensor "+self.node.attrs[e])
                 if en:
-                    self.endstops.append(en.object.get(e, en.attrs["pin"], self.steppers))
+                    for s in self.steppers:
+                        en.object.sensor.add_stepper(s)
+                    self.endstops.append((en.object.sensor, e))
+                    #query_endstops = printer.try_load_module(config, 'query_endstops')
+                    #query_endstops.register_endstop(mcu_endstop, name)
                 else:
                     self.endstops.append((None, e))
             else:
@@ -51,27 +55,34 @@ class Object(composite.Object):
         self.get_tag_position = mcu_stepper.get_tag_position
         self.set_tag_position = mcu_stepper.set_tag_position
         self.calc_position_from_coord = mcu_stepper.calc_position_from_coord
-        # Primary endstop position
+        self.setup_homing()
+        self.ready = True
+        return self
+    def setup_position_endstop(self, default_position_endstop = None):
+        self.default_position_endstop = default_position_endstop
         mcu_endstop = self.endstops[0][0]
         if hasattr(mcu_endstop, "get_position_endstop"):
             self.position_endstop = mcu_endstop.get_position_endstop()
         elif default_position_endstop is None:
-            self.position_endstop = self.node.attr_get_float('position_endstop_min')
+            self.position_endstop = self.node.attr_get_float("position_endstop_min")
         else:
-            self.position_endstop = self.node.attr_get_float('position_endstop_min', default=default_position_endstop)
-        # Axis range
+            self.position_endstop = self.node.attr_get_float("position_endstop_min", default=default_position_endstop)
+    def setup_axis_range(self, need_position_minmax = True, default_position_endstop = None):
+        self.need_position_minmax = need_position_minmax
+        self.setup_position_endstop(default_position_endstop)
         if need_position_minmax:
+            self.need_position_minmax = True
             self.position_min = self.node.attr_get_float('position_min', default=0.)
             self.position_max = self.node.attr_get_float('position_max', above=self.position_min)
         else:
+            self.need_position_minmax = False
             self.position_min = 0.
             self.position_max = self.position_endstop
         if (self.position_endstop < self.position_min or self.position_endstop > self.position_max):
-            pass
-            #raise config.error(
-            #    "position_endstop in section '%s' must be between"
-            #    " position_min and position_max" % config.get_name())
-        # Homing mechanics
+            raise error("position_endstop in section '%s' must be between position_min and position_max" % self.node.name)
+    # delta/rotarydelta printers kinematic need to call this after rail init to set need_position_minmax and default_position_endstop
+    def setup_homing(self, need_position_minmax = True, default_position_endstop = None):
+        self.setup_axis_range(need_position_minmax, default_position_endstop)
         self.homing_speed = self.node.attr_get_float('homing_speed', default=5.0, above=0.)
         self.second_homing_speed = self.node.attr_get_float('second_homing_speed', default=self.homing_speed/2., above=0.)
         self.homing_retract_speed = self.node.attr_get_float('homing_retract_speed', default=self.homing_speed, above=0.)
@@ -84,10 +95,7 @@ class Object(composite.Object):
             elif self.position_endstop >= self.position_max - axis_len / 4.:
                 self.homing_positive_dir = True
             else:
-                pass
-                #raise config.error(
-                #    "Unable to infer homing_positive_dir in section '%s'" % (config.get_name(),))
-        return self
+                raise error("Unable to infer homing_positive_dir in section '%s'" % (self.node.name,))
     def get_range(self):
         return self.position_min, self.position_max
     def get_homing_info(self):
@@ -120,7 +128,7 @@ class Object(composite.Object):
 
 def load_node_object(hal, node):
     config_ok = True
-    for a in node.module.attrs:
+    for a in node.module.ATTRS:
         if a not in node.attrs:
             config_ok = False
             break

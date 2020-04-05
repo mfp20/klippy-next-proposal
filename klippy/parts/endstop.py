@@ -7,7 +7,7 @@
 import logging
 import sensor, controller
 
-attrs = ("type", "pin")
+ATTRS = ("type", "pin")
 
 class MCU_endstop:
     RETRY_QUERY = 1.000
@@ -121,18 +121,13 @@ class Dummy(sensor.Object):
 
 class Object(sensor.Object):
     def configure(self):
-        pass
-    def get(self, name, pin, steppers):
-        mcu_endstop = self.hal.get_controller().pin_setup("endstop", pin)
-        for s in steppers:
-            mcu_endstop.add_stepper(s)
-        return (mcu_endstop, name)
-        #query_endstops = printer.try_load_module(config, 'query_endstops')
-        #query_endstops.register_endstop(mcu_endstop, name)
-
+        if self.ready:
+            return
+        self.sensor = self.hal.get_controller().pin_setup("endstop", self.node.attrs["pin"])
+        self.ready = True
 def load_node_object(hal, node):
     config_ok = True
-    for a in node.module.attrs:
+    for a in node.module.ATTRS:
         if a not in node.attrs:
             config_ok = False
             break

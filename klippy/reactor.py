@@ -110,6 +110,7 @@ class Select:
         # Greenlets
         self._g_dispatch = None
         self._greenlets = []
+        self.ready = True
     # Timers
     def update_timer(self, timer_handler, waketime):
         timer_handler.waketime = waketime
@@ -256,8 +257,6 @@ class Select:
 
 class Poll(Select):
     def __init__(self, hal, node):
-        self.hal = hal
-        self.node = node
         Select.__init__(self, hal, node)
         self._poll = select.poll()
         self._fds = {}

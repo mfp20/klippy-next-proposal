@@ -34,6 +34,7 @@ class Object:
     def init(self):
         self.tcontroller = {}
         self.gcodeid = {}
+        self.ready = True
     def register(self):
         self.hal.get_printer().register_event_handler("controller:request_restart", self._off_all_controls)
         self.hal.get_commander().register_command("TEMPERATURE_HEATERS_OFF", self.cmd_TEMPERATURE_HEATERS_OFF, desc=self.cmd_TEMPERATURE_HEATERS_OFF_help)

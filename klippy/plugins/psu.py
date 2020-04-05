@@ -15,7 +15,8 @@ class Dummy(part.Object):
         part.Object(self, hal, node)
 
 class Object(part.Object):
-    pass
+    def configure(self):
+        self.ready = True
 
 def load_tree_node(hal, node, parts):
     used_parts = set()

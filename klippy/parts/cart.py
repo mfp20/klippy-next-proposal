@@ -6,12 +6,11 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
+from messaging import msg
+from messaging import Kerr as error
 import composite
 
-attrs = ("axis",)
-
-class error(Exception):
-    pass
+ATTRS = ()
 
 class Dummy(composite.Object):
     def __init__(self, hal, cnode):
@@ -21,11 +20,13 @@ class Dummy(composite.Object):
 
 class Object(composite.Object):
     def init(self):
-        pass
+        if self.ready:
+            return
+        self.ready = True
 
 def load_node_object(hal, node):
     config_ok = True
-    for a in node.module.attrs:
+    for a in node.module.ATTRS:
         if a not in node.attrs:
             config_ok = False
             break

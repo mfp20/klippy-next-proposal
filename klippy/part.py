@@ -12,4 +12,5 @@ class Object():
     def __init__(self, hal, node):
         self.hal = hal
         self.node = node
+        self.ready = False
 

@@ -332,7 +332,7 @@ class SPI(sensor.Object):
 # Thermometer
 ######################################################################
 
-attrs = ("type", "model")
+ATTRS = ("type", "model")
 SAMPLE_TIME = 0.001
 SAMPLE_COUNT = 8
 REPORT_TIME = 0.300
@@ -365,9 +365,11 @@ class Dummy(sensor.Object):
 # TODO test custom sensors
 class Object(sensor.Object):
     def configure(self):
+        if self.ready:
+            return
         # setup thermometer probe
         params = {}
-        params["name"] = self.node.name.split(" ")[1]
+        params["name"] = self.node.get_id()
         params["model"] = self.node.attrs["model"]
         # thermistor sensor
         if self.node.attrs["model"] in thermistor:
@@ -436,6 +438,7 @@ class Object(sensor.Object):
         # register thermometer
         self.mcu_adc = self.hal.get_controller().pin_setup("adc", self.node.attr_get("pin"))
         self.mcu_adc.setup_adc_callback(REPORT_TIME, self.adc_callback)
+        self.ready = True
     def setup_callback(self, temperature_callback):
         self.temperature_callback = temperature_callback
     def get_report_time_delta(self):
@@ -449,7 +452,7 @@ class Object(sensor.Object):
 
 def load_node_object(hal, node):
     config_ok = True
-    for a in node.module.attrs:
+    for a in node.module.ATTRS:
         if a not in node.attrs:
             config_ok = False
             break

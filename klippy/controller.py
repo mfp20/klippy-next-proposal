@@ -651,7 +651,7 @@ class DummyMCU:
 class MCU:
     def __init__(self, hal, boardnode, clocksync):
         self.hal = hal
-        self._name = boardnode.name.split(" ")[1]
+        self._name = boardnode.get_id()
         self._board = boardnode.object
         self._clocksync = clocksync
         self._reactor = self.hal.get_reactor()
@@ -1015,7 +1015,8 @@ class Board(part.Object):
             self.mcu = DummyMCU(self.hal, self.node)
             self.node.attr_set("dummy", True)
         self.hal.mcu_count = self.hal.mcu_count + 1
-        self.hal.get_printer().register_event_handler("board:"+self.node.name.split(" ")[1]+":configured", self.mcu_ready)
+        self.hal.get_printer().register_event_handler("board:"+self.node.get_id()+":configured", self.mcu_ready)
+        self.ready = True
     def mcu_ready(self):
         self.hal.get_printer().send_event("controller:connected")
     def pin_parse(self, pin_desc, can_invert=False, can_pullup=False):
@@ -1096,6 +1097,7 @@ class Object(composite.Object):
     def init(self):
         self.board = {}
         self.board_ready = 0
+        self.ready = True
     def register(self):
         self.hal.get_printer().register_event_handler("controller:connected", self.connected)
         self.hal.get_commander().register_command('SHOW_PINS_ALL', self.cmd_SHOW_PINS_ALL, desc=self.cmd_SHOW_PINS_ALL_help)
@@ -1108,7 +1110,7 @@ class Object(composite.Object):
         elif self.board_ready > self.hal.mcu_count:
             raise
     def register_board(self, bnode):
-        bname = bnode.name.split(" ")[1]
+        bname = bnode.get_id()
         if bname in self.board:
             raise error("Duplicate mcu name '%s'" % bname)
         self.board[bname] = bnode.object = Board(self.hal, bnode)

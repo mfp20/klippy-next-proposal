@@ -42,6 +42,7 @@ class Object(composite.Object):
             pass
         for c in self.children_bygroup("cooler"):
             pass
+        self.ready = True
     def register(self):
         pass
     def register_sensor(self):

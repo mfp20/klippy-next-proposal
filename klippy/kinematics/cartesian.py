@@ -6,14 +6,15 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
-import hw, part, instrument
+import hw, composite, instrument
 
-attrs = ()
+ATTRS = ()
 
-class Object(part.Object):
-    def get(self, thnode):
+class Object(composite.Object):
+    def init(self):
+        thnode = self.node.children["toolhead "+self.node.get_id()]
         toolhead = thnode.object
-        # Setup axis rails
+        # setup rails
         self.dual_carriage_axis = None
         self.dual_carriage_rails = []
         railnodes = dict()
@@ -22,43 +23,40 @@ class Object(part.Object):
             for r in thnode.attrs[a].split(","):
                 rr.append(thnode.child_get_first("rail "+r))
             railnodes[a] = rr
-        self.rails = [railnodes["x"][0].object.get(), railnodes["y"][0].object.get(), railnodes["z"][0].object.get()]
+        self.rails = [railnodes["x"][0].object, railnodes["y"][0].object, railnodes["z"][0].object]
         for rail, axis in zip(self.rails, "xyz"):
             rail.setup_itersolve("cartesian_stepper_alloc", axis)
         for s in self.get_steppers():
             s.set_trapq(toolhead.get_trapq())
             toolhead.register_step_generator(s.generate_steps)
-        self.hal.get_printer().register_event_handler("stepper_enable:motor_off", self._motor_off)
         # setup boundary checks
-        max_velocity, max_accel = toolhead.get_max_velocity()
-        self.max_z_velocity = self.node.attr_get_float("max_z_velocity", default=max_velocity, above=0., maxval=max_velocity)
-        self.max_z_accel = self.node.attr_get_float("max_z_accel", default=max_accel, above=0., maxval=max_accel)
+        self.max_velocity, self.max_accel = toolhead.get_max_velocity()
+        self.max_z_velocity = thnode.attr_get_float("max_z_velocity", default=self.max_velocity, above=0., maxval=self.max_velocity)
+        self.max_z_accel = thnode.attr_get_float("max_z_accel", default=self.max_accel, above=0., maxval=self.max_accel)
         self.limits = [(1.0, -1.0)] * 3
         # setup stepper max halt velocity
-        max_halt_velocity = toolhead.get_max_axis_halt()
-        self.rails[0].set_max_jerk(max_halt_velocity, max_accel)
-        self.rails[1].set_max_jerk(max_halt_velocity, max_accel)
-        self.rails[2].set_max_jerk(min(max_halt_velocity, self.max_z_velocity), max_accel)
-        # setup dual-carriage (if any)
+        self.max_halt_velocity = toolhead.get_max_axis_halt()
+        self.rails[0].set_max_jerk(self.max_halt_velocity, self.max_accel)
+        self.rails[1].set_max_jerk(self.max_halt_velocity, self.max_accel)
+        self.rails[2].set_max_jerk(min(self.max_halt_velocity, self.max_z_velocity), self.max_accel)
+        # setup dual-cart (if any)
         dc_axis = None
-        if len(railnodes["x"]) > 1:
-            dc_axis = "x"
-        elif len(railnodes["y"]) > 1:
-            dc_axis = "y"
+        if "dual-cart" in self.node.attrs:
+            dc_axis = self.node.attrs["dual-cart"]
         if dc_axis:
-            logging.info("DUAL CARRIAGE")
-            self.node.attrs["dual_carriage"] = dc_axis
             self.dual_carriage_axis = {'x': 0, 'y': 1}[dc_axis]
             dc_rail = railnodes[dc_axis][1].object
             # setup dual stepper
-            dc_rail.add_stepper(railnodes[dc_axis][1])
             dc_rail.setup_itersolve('cartesian_stepper_alloc', dc_axis)
             for s in dc_rail.get_steppers():
                 toolhead.register_step_generator(s.generate_steps)
-            dc_rail.set_max_jerk(max_halt_velocity, max_accel)
+            dc_rail.set_max_jerk(self.max_halt_velocity, self.max_accel)
             self.dual_carriage_rails = [self.rails[self.dual_carriage_axis], dc_rail]
-            self.hal.get_gcode().register_command('SET_DUAL_CARRIAGE', self.cmd_SET_DUAL_CARRIAGE, desc=self.cmd_SET_DUAL_CARRIAGE_help)
-	return self
+        self.ready = True
+    def register(self):
+        self.hal.get_printer().register_event_handler("stepper_enable:motor_off", self._motor_off)
+        if "dual-cart" in self.node.attrs:
+            self.hal.get_gcode(self.node.get_id()).register_command('SET_DUAL_CARRIAGE', self.cmd_SET_DUAL_CARRIAGE, desc=self.cmd_SET_DUAL_CARRIAGE_help)
     def get_steppers(self):
         rails = self.rails
         if self.dual_carriage_axis is not None:
@@ -151,11 +149,9 @@ class Object(part.Object):
         self._activate_carriage(carriage)
         gcode.reset_last_position()
 
-# toolhead node-tree is built in cartesian module because
-# each kinematic have different toolhead options,
-# and doesn't need any children
-def load_tree_node(hal, thnode, parts):
+def load_tree_node(hal, knode, parts):
     used_parts = set()
+    thnode = knode.child_get_first("toolhead ")
     for a in thnode.attrs:
         if a == "x":
             for r in thnode.attrs[a].split(","):
@@ -163,36 +159,31 @@ def load_tree_node(hal, thnode, parts):
                     thnode.children[parts["rail "+r].name] = parts["rail "+r]
                     used_parts.add("rail "+r)
             if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dualcarriage"] = a
+                knode.attrs["dual-cart"] = a
         elif a == "y":
             for r in thnode.attrs[a].split(","):
                 if "rail "+r in parts:
                     thnode.children[parts["rail "+r].name] = parts["rail "+r]
                     used_parts.add("rail "+r)
             if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dualcarriage"] = a
+                knode.attrs["dual-cart"] = a
         elif a == "z":
             for r in thnode.attrs[a].split(","):
                 if "rail "+r in parts:
                     thnode.children[parts["rail "+r].name] = parts["rail "+r]
                     used_parts.add("rail "+r)
             if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dualcarriage"] = a
-        elif a == "instrument":
-            for c in thnode.attrs[a].split(","):
-                if "cart "+c in parts:
-                    thnode.children[parts["cart "+c].name] = parts["cart "+c]
-                    used_parts.add("cart "+c)
+                knode.attrs["dual-cart"] = a
         elif a in hal.pgroups or a in hal.cgroups:
             for p in thnode.attrs[a].split(","):
                 thnode.children[parts[a+" "+p].name] = parts[a+" "+p]
     # add toolhead to printer tree
-    hal.tree.printer.children[thnode.name] = thnode
+    hal.tree.printer.children[knode.name] = knode
     return used_parts
 
 def load_node_object(hal, node):
     config_ok = True
-    for a in node.module.attrs:
+    for a in node.module.ATTRS:
         if a not in node.attrs:
             config_ok = False
             break

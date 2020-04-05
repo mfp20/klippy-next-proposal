@@ -15,6 +15,10 @@ class PrinterNode:
         self.children = collections.OrderedDict()
         self.module = None
         self.object = None
+    def get_group(self):
+        return self.name.split(" ")[0]
+    def get_id(self):
+        return self.name.split(" ")[1]
     # set attr
     def attr_set(self, key, value):
         self.attrs[key] = value
@@ -105,7 +109,8 @@ class PrinterNode:
     # get first child (deep recursion) which name starts with "name"
     def child_get_first(self, name, root = None):
         if not root: root = self
-        if root.name.startswith(name): return root
+        if root.name.startswith(name): 
+            return root
         for child in root.children.values():
            n = child.child_get_first(name, child)
            if n: return n
@@ -173,7 +178,7 @@ class PrinterNode:
         if not root: root = self
         for cn in root.children.keys():
            if cn.startswith(childname): return root
-           ccn = root.children[cn].node_get_parent(childname)
+           ccn = root.children[cn].node_get_parent(root.children[cn], childname)
            if ccn: return ccn
         return None
     def node_show(self, node = None, indent=0):

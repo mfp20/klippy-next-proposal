@@ -15,7 +15,7 @@ from messaging import Kerr as error
 class sentinel:
     pass
 
-class Object:
+class Object():
     object_command = ["UNKNOWN", "IGNORE", "ECHO"]
     extended_r = re.compile(
         r'^\s*(?:N[0-9]+\s*)?'
@@ -185,6 +185,7 @@ class Dispatch(Object):
         # command handling
         self.is_printer_ready = False
         self.commander = {}
+        self.ready = True
     def register(self):
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
         self.printer.register_event_handler("klippy:shutdown", self._handle_shutdown)
@@ -438,6 +439,7 @@ class Gcode(Object):
         self.toolhead = None
         self.heaters = None
         self.axis2pos = {'X': 0, 'Y': 1, 'Z': 2, 'E': 3}
+        self.ready = True
     def register(self):
         for cmd in self.my_command:
             func = getattr(self, 'cmd_' + cmd)
@@ -446,8 +448,6 @@ class Gcode(Object):
             self.register_command(cmd, func, wnr, desc)
             for a in getattr(self, 'cmd_' + cmd + '_aliases', []):
                 self.register_command(a, func, wnr)
-        # commander
-        self.hal.get_commander().register_commander(self.node.name, self)
         # events
         self.hal.get_printer().register_event_handler("extruder:activate_extruder", self._handle_activate_extruder)
     # event handlers
@@ -759,3 +759,6 @@ class Gcode(Object):
             self.last_position[:3] = state['last_position'][:3]
             self.move_with_transform(self.last_position, speed)
 
+def load_node_object(hal, node):
+    node.object = Gcode(hal, node)
+    hal.get_commander().register_commander("gcode "+node.get_id(), node.object)

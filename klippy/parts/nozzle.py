@@ -10,7 +10,7 @@ attrs = ("diameter",)
 
 class Object(part.Object):
     def configure(self):
-        pass
+        self.ready = True
 
 def load_node_object(hal, node):
     node.object = Object(hal, node)

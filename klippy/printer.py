@@ -112,15 +112,16 @@ class Composer:
         return composite
     def compose_toolhead(self, config, parts):
         name = config.get_name()
+        knode = tree.PrinterNode("kinematic "+name.split(" ")[1])
+        knode.module = importlib.import_module('kinematics.' + config.getsection(name).get("kinematics"))
         toolhead = tree.PrinterNode(name)
         toolhead.module = importlib.import_module("instrument")
         toolhead.child_set(tree.PrinterNode("gcode "+name.split(" ")[1]))
         toolhead.children["gcode "+name.split(" ")[1]].module = self.hal.get_node("commander").module
-        toolhead.child_set(tree.PrinterNode("kinematic "+name.split(" ")[1]))
-        toolhead.children["kinematic "+name.split(" ")[1]].module = importlib.import_module('kinematics.' + config.getsection(name).get("kinematics"))
         for a in config.getsection(name).fileconfig.options(name):
             toolhead.attrs[a] = config.getsection(name).get(a)
-        return toolhead.children["kinematic "+name.split(" ")[1]].module.load_tree_node(self.hal, toolhead, parts)
+        knode.child_set(toolhead)
+        return knode.module.load_tree_node(self.hal, knode, parts)
 
 # klippy main app
 
