@@ -139,6 +139,7 @@ class Object(composite.Object):
         pass
     # helper to setup governors
     def _mkgov(self, max_power):
+        self.max_power = max_power
         gov = self.node.attr_get_choice("control", {"watermark": "watermark", "pid": "pid"})
         if gov == "watermark":
             max_delta = self.node.attr_get_float("delta_max", default=2.0, above=0.)
@@ -283,17 +284,36 @@ class Object(composite.Object):
         else:
             raise error("Requested the dew temperature but '%s' doesn't have the needed sensors!!!", self.node.name)
     # set heaters pwm output value
-    def set_heaters(self, pwm_time, value):
-        for h in self.heater:
+    def set_heaters(self, pwm_time, value, sensorname):
+        for h in self.heater.value():
             h.pin.set_pwm(pwm_time, value)
     # set coolers pwm output value
-    def set_coolers(self, pwm_time, value):
-        for c in self.cooler:
-            c.pin.set_pwm(pwm_time, value)
-    # set both pwm output value (coolers are inverse of heaters)
-    def set_output(self, pwm_time, value):
-        self.set_heaters(self, pwm_time, value)
-        self.set_coolers(self, pwm_time, 1.0-value)
+    def set_coolers(self, pwm_time, hvalue, sensorname):
+        # get options
+        maxpower = self.thermometer[sensorname]["gov"].max_power
+        for c in self.cooler.value():
+            # compute
+            if c.mode == "on":
+                cvalue = maxpower
+            elif c.mode == "equal":
+                cvalue = hvalue
+            elif c.mode == "inverted":
+                cvalue = 1.0-hvalue
+            elif c.mode == "moderated":
+                if hvalue > (0.7*maxpower):
+                    cvalue = 0.
+                elif hvalue < (0.2*maxpower):
+                    cvalue = maxpower
+                else:
+                    cvalue = 1.0-hvalue
+            else:
+                cvalue = 0.
+            # apply
+            c.pin.set_pwm(pwm_time, cvalue)
+    # set both pwm output value (coolers are a "moderated" inverse of heaters)
+    def set_output(self, pwm_time, value, sensorname):
+        self.set_heaters(pwm_time, value, sensorname)
+        self.set_coolers(pwm_time, value, sensorname)
     # adjust temp by modifying pwm output
     def adj_temp(self, read_time, value, sensorname):
         sensor = self.thermometer[sensorname]
@@ -311,7 +331,7 @@ class Object(composite.Object):
         # TODO, check value limited := [0.0,1.0], in order to invert it easy
         logging.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])", self.node.name, value, pwm_time, sensor["current"], self.last_time, sensor["target"])
         # output
-        self.set_output(pwm_time, value)
+        self.set_output(pwm_time, value, sensorname)
     #
     def temperature_callback(self, read_time, temp, sensorname):
         if sensorname in self.thermometer:
@@ -337,6 +357,22 @@ class Object(composite.Object):
                 sensor["last"] = read_time
         # TODO check they are updated
         #logging.debug("%s: current=%s time=%s", sensorname, sensor["current"], sensor["last"])
+    def humidity_callback(self, read_time, hum, sensorname):
+        if sensorname in self.hygrometer:
+            sensor = self.hygrometer[sensorname]
+        else:
+            raise error("Can't read humidity: unknown sensor '%s'" % sensorname)
+        with self.lock:
+            sensor["current"] = hum
+            sensor["last"] = read_time
+    def pressure_callback(self, read_time, press, sensorname):
+        if sensorname in self.barometer:
+            sensor = self.barometer[sensorname]
+        else:
+            raise error("Can't read pressure: unknown sensor '%s'" % sensorname)
+        with self.lock:
+            sensor["current"] = press
+            sensor["last"] = read_time
     #
     def avoid_dew(self):
         self.alter_min_temp(self.calc_dew_point())

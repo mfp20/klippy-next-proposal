@@ -24,6 +24,7 @@ class Object(part.Object):
             self.pin = self.hal.get_controller().pin_setup("digital_out", self.node.attr_get("pin"))
         else:
             self.pin = self.hal.get_controller().pin_setup("pwm", self.node.attr_get("pin"))
+        self.mode = self.node.attr_get_choice("mode", {"on": "on", "equal": "equal", "invert": "invert", "moderated": "moderated"}, default="moderated")
         self.ready = True
 
 def load_node_object(hal, node):

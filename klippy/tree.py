@@ -41,7 +41,7 @@ class PrinterNode:
             choices["None"] = "None"
             choices["none"] = "none"
         if default:
-            c = self.attr_get(attr, default)
+            c = self.attr_get(attr, False, default)
         else:
             c = self.attr_get(attr)
         if c in choices:
