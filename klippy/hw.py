@@ -51,7 +51,7 @@ class Manager:
                 if not node.object:
                     logging.warning("\t\t- CAN'T LOAD: ..:%s:%s", node.node_get_parent(self.tree.printer, node.name).name, node.name)
         #logging.debug(self.show())
-        # for each printer shallow children, build/configure (if needed)
+        # build/configure (if needed) each printer shallow children
         logging.info("- Building and configuring objects.")
         for name,node in self.tree.printer.children.items():
             if node.name != "reactor" \
@@ -72,9 +72,15 @@ class Manager:
                     logging.debug("(ERROR) %s, no object", node.name)
         # configure toolhead(s)
         for t in self.tree.printer.children_deep_byname("toolhead ", list()): 
+            #logging.debug("BUILD %s", t.name)
             if isinstance(t.object, instrument.Object):
-                #logging.debug("BUILD TOOLHEAD: %s", t.name)
                 t.object.build()
+            else:
+                t.object.init()
+        # init kinematics
+        for k in self.tree.printer.children_deep_byname("kinematic ", list()):
+            #logging.debug("INIT %s %s", k.name, k.object)
+            k.object.init()
         # last check
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if hasattr(node.object, "ready"):

@@ -12,6 +12,8 @@ ATTRS = ()
 
 class Object(composite.Object):
     def init(self):
+        if self.ready:
+            return
         thnode = self.node.children["toolhead "+self.node.get_id()]
         toolhead = thnode.object
         # setup rails
@@ -182,14 +184,6 @@ def load_tree_node(hal, knode, parts):
     return used_parts
 
 def load_node_object(hal, node):
-    config_ok = True
-    for a in node.module.ATTRS:
-        if a not in node.attrs:
-            config_ok = False
-            break
-    if config_ok:
-        node.object = Object(hal, node)
-    else:
-        node.object = kinematics.dummy.Object(hal, node)
-    return node.object
+    #logging.debug("LOAD %s", node.name)
+    node.object = Object(hal, node)
 

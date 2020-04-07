@@ -202,9 +202,9 @@ class Dummy(composite.Object):
     def __init__(self, hal, node):
 	composite.Object.__init__(self,hal, node)
         logging.warning("instrument.Dummy:__init__():%s", self.node.name)
-        knode = self.hal.tree.printer.children["kinematic "+self.node.get_id()]
-        knode.object = dummy.Object(self.hal, knode)
     def init(self):
+        if self.ready:
+            return
         self.ready = True
     def register(self):
         pass
@@ -575,6 +575,7 @@ class Object(composite.Object):
         self._calc_junction_deviation()
 
 def load_node_object(hal, node):
+    #logging.debug("LOAD %s", node.name)
     config_ok = True
     for a in node.module.ATTRS:
         if a not in node.attrs:
@@ -587,6 +588,7 @@ def load_node_object(hal, node):
         node.object = Object(hal, node)
     else:
         node.object = Dummy(hal, node)
-
-    #kinematics.extruder.add_printer_objects(config)
+        # force dummy kinematic too
+        kin = node.node_get_parent(hal.tree.printer, node.name)
+        kin.object = dummy.Object(hal, kin)
 
