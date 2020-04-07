@@ -24,8 +24,7 @@ class Composer:
                 part = tree.PrinterNode(s.get_name())
                 for k in s.fileconfig.options(s.get_name()):
                     for a in s.get(k).split(","):
-                        if a != "none":
-                            part.attr_set(k, a)
+                        part.attr_set(k, a)
                 if p == "mcu":
                     part.module = importlib.import_module("controller")
                 elif p == "sensor":
@@ -179,7 +178,6 @@ class Main:
         try:
             # parse config
             self._read_config()
-            logging.info("* Init complete.")
             # ready to connect
             self.send_event("klippy:mcu_identify")
             for cb in self.event_handlers.get("klippy:connect", []):
@@ -212,6 +210,8 @@ class Main:
             logging.exception("Unhandled exception during ready callback")
             self.invoke_shutdown("Internal error during ready callback: %s" % (
                 str(e),))
+        systime = time.time()
+        logging.info("Init complete at %s (%.1f %.1f)", time.asctime(time.localtime(systime)), time.time(), self.reactor.monotonic())
     def run(self):
         systime = time.time()
         monotime = self.reactor.monotonic()

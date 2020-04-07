@@ -68,29 +68,54 @@ class Object(composite.Object):
         #logging.debug("MANGLE: thermometer(%d), hygrometer(%d), barometer(%d), heater(%d), cooler(%d)", len(self.thermometer), len(self.hygrometer), len(self.barometer), len(self.heater), len(self.cooler))
         # mangle sensor-heater-cooler relations and setup safe governors:
         #   - first thermometer actuate heaters/coolers
-        #   - no thermomether heaters/coolers stay off
+        #   - if no thermomether heaters/coolers stay off
+        #   - more complex relations must be established later on (ex: when the parent is init'ed)
         if len(self.thermometer) > 0:
             if len(self.heater) == 0 and len(self.cooler) == 0:
                 #logging.debug("Pure sensor, no temperature adjust (%s)", self.node.name)
                 pass
             elif len(self.heater) > 0 and len(self.cooler) == 0 and not self.capas["humidity"] and not self.capas["pressure"]:
                 #logging.debug("Pure heater (%s)", self.node.name)
-                gov = self._mkgov(self.node)
+                # get maximum allowable power among all heaters
+                maxpower = 1.
+                for h in self.heater.values():
+                    if h["pin"].max_power < maxpower:
+                        maxpower = h["pin"].max_power
+                # create a common gov for all heaters
+                gov = self._mkgov(maxpower)
+                # set gov
                 for h in self.heater:
                     self.heater[h]["gov"] = gov
                 # first thermometer in command
                 self.thermometer[next(iter(self.thermometer))]["gov"] = gov
             elif (len(self.heater) == 0) and (len(self.cooler) > 0) and not self.capas["humidity"] and not self.capas["pressure"]:
                 #logging.debug("Pure cooler (%s)", self.node.name)
-                gov = self._mkgov(self.node)
+                # get maximum allowable power among all coolers
+                maxpower = 1.
+                for c in self.cooler.values():
+                    if c["pin"].max_power < maxpower:
+                        maxpower = c["pin"].pin.max_power
+                # create a common gov for all coolers
+                gov = self._mkgov(maxpower)
                 for c in self.cooler:
                     self.cooler[c]["gov"] = gov
                 # first thermometer in command
                 self.thermometer[next(iter(self.thermometer))]["gov"] = gov
             elif len(self.thermometer) == len(self.heater) and len(self.heater) == len(self.cooler):
-                # for each thermometer there is 1 heater and 1 cooler
                 #logging.debug("Thermometer (%d), heater (%d), cooler (%d)", len(self.thermometer), len(self.heater), len(self.cooler))
-                gov = self._mkgov(self.node)
+                # get maximum allowable power among all heaters
+                maxpower = 1.
+                for h in self.heater.values():
+                    if h["pin"].max_power < maxpower:
+                        maxpower = h["pin"].max_power
+                # get maximum allowable power among all coolers
+                for c in self.cooler.values():
+                    if c["pin"].max_power < maxpower:
+                        maxpower = c["pin"].max_power
+                # create a common gov for all heaters&coolers
+                gov = self._mkgov(maxpower)
+                for h in self.heater:
+                    self.heater[h]["gov"] = gov
                 for c in self.cooler:
                     self.cooler[c]["gov"] = gov
                 # first thermometer in command
@@ -106,15 +131,14 @@ class Object(composite.Object):
         else :
             raise error("Unknown sensors(%d)-actuators(%d) combo." % (len(self.thermometer)+len(self.hygrometer)+len(self.barometer), len(self.heater)+len(self.cooler)))
         #
+        self.hal.get_temperature().tc_register(self.node)
         self.ready = True
     def register(self):
-        #self.gcode.register_mux_command("SET_TEMPERATURE", "TCONTROL", self.node.name, self.cmd_SET_TEMPERATURE, desc=self.cmd_SET_TEMPERATURE_help)
+        #gcode = self.hal.get_my_gcode(tc)
+        #gcode.register_mux_command("SET_TEMPERATURE", "TCONTROL", self.node.name, self.cmd_SET_TEMPERATURE, desc=self.cmd_SET_TEMPERATURE_help)
         pass
     # helper to setup governors
-    def _mkgov(self, node):
-        max_power = 1.
-        # TODO: check power_max for all heaters/coolers in this tcontrol
-        #max_power = node.attr_get_float("power_max", default=1., above=0., maxval=1.)
+    def _mkgov(self, max_power):
         gov = self.node.attr_get_choice("control", {"watermark": "watermark", "pid": "pid"})
         if gov == "watermark":
             max_delta = self.node.attr_get_float("delta_max", default=2.0, above=0.)
@@ -156,7 +180,7 @@ class Object(composite.Object):
         self.hygrometer[node.name]["max"] = self.node.attr_get_float("hygro_max", maxval=100, above=self.hygrometer[node.name]["min"])
         self.hygrometer[node.name]["current"] = 0.
         self.hygrometer[node.name]["smoothed"] = 0.
-        #
+        # setup sensor
         # TODO
         # adapt max temp (in case this part can't withstand higher temperatures)
         self.alter_max_temp(node.attr_get_float("temp_max", default=ALUMINIUM_OPERATING, above=self.hygrometer[node.name]["min"]))
@@ -171,7 +195,7 @@ class Object(composite.Object):
         self.barometer[node.name]["max"] = node.attr_get_float("baro_max", maxval=50000, above=self.barometer[node.name]["min"]) # TODO mbar, pa, ... ?
         self.barometer[node.name]["current"] = 0.
         self.barometer[node.name]["smoothed"] = 0.
-        #
+        # setup sensor
         # TODO
         # adapt max temp (in case this part can't withstand higher temperatures)
         self.alter_max_temp(node.attr_get_float("temp_max", default=ALUMINIUM_OPERATING, above=self.barometer[node.name]["min"]))
@@ -269,11 +293,10 @@ class Object(composite.Object):
     # set both pwm output value (coolers are inverse of heaters)
     def set_output(self, pwm_time, value):
         self.set_heaters(self, pwm_time, value)
-        self.set_coolers(self, pwm_time, 1/value)
+        self.set_coolers(self, pwm_time, 1.0-value)
     # adjust temp by modifying pwm output
-    def adj_temp(self, read_time, value, sensor = None):
-        if not sensor:
-            sensor = self.thermometer[next(iter(self.thermometer))]
+    def adj_temp(self, read_time, value, sensorname):
+        sensor = self.thermometer[sensorname]
         # off
         if sensor["target"] <= 0.:
             value = 0.
@@ -286,22 +309,34 @@ class Object(composite.Object):
         self.last_pwm_value = value
         # value calculation
         # TODO, check value limited := [0.0,1.0], in order to invert it easy
-        logging.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])", self.node.name, value, pwm_time, sensor["last"], self.last_time, sensor["target"])
+        logging.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])", self.node.name, value, pwm_time, sensor["current"], self.last_time, sensor["target"])
         # output
         self.set_output(pwm_time, value)
     #
-    def temperature_callback(self, read_time, temp, sensor = None):
-        if not sensor:
-            sensor = self.thermometer[next(iter(self.thermometer))]
-        with self.lock:
-            time_diff = read_time - self.last_time
-            sensor["last"] = sensor["current"]
-            self.last_time = read_time
-            sensor["gov"].value_update(read_time, sensor["current"], sensor["target"], self.adj_temp)
-            temp_diff = sensor["current"] - sensor["smoothed"]
-            adj_time = min(time_diff * self.inv_smooth_time, 1.)
-            sensor["smoothed"] += temp_diff * adj_time
-        #logging.debug("temp: %.3f %f = %f", read_time, temp)
+    def temperature_callback(self, read_time, temp, sensorname):
+        if sensorname in self.thermometer:
+            sensor = self.thermometer[sensorname]
+        else:
+            raise error("Can't read temperature: unknown sensor '%s'" % sensorname)
+        if sensorname == next(iter(self.thermometer)):
+            # first thermometer keeps the clock and trigger governor(s)
+            with self.lock:
+                time_diff = read_time - self.last_time
+                sensor["current"] = temp
+                sensor["last"] = self.last_time = read_time
+                # heaters&coolers, adjust temperature
+                sensor["gov"].value_update(read_time, sensorname, sensor, self.adj_temp)
+                #
+                temp_diff = temp - sensor["smoothed"]
+                adj_time = min(time_diff * self.inv_smooth_time, 1.)
+                sensor["smoothed"] += temp_diff * adj_time
+        else:
+            # other thermometers store read time and temperature only
+            with self.lock:
+                sensor["current"] = temp
+                sensor["last"] = read_time
+        # TODO check they are updated
+        #logging.debug("%s: current=%s time=%s", sensorname, sensor["current"], sensor["last"])
     #
     def avoid_dew(self):
         self.alter_min_temp(self.calc_dew_point())
@@ -321,6 +356,12 @@ class Object(composite.Object):
             raise self.printer.command_error("Requested temperature (%.1f) out of range (%.1f:%.1f)" % (degrees, self.min_temp, self.max_temp))
         with self.lock:
             sensor["target"] = degrees
+    def set_off_heaters(self, degrees):
+        logging.warning("TODO set_off_heaters")
+        pass
+    def set_off_coolers(self, degrees):
+        logging.warning("TODO set_off_coolers")
+        pass
     def check_busy(self, eventtime, sensor = None):
         if not sensor:
             sensor = self.thermometer[next(iter(self.thermometer))]
@@ -349,7 +390,7 @@ class Object(composite.Object):
             sensor = self.thermometer[next(iter(self.thermometer))]
         with self.lock:
             target_temp = sensor["target"]
-            last_temp = sensor["last"]
+            last_temp = sensor["current"]
             last_pwm_value = self.last_pwm_value
         is_active = target_temp or last_temp > 50.
         return is_active, '%s: target=%.0f temp=%.1f pwm=%.3f' % (self.node.name, target_temp, last_temp, last_pwm_value)

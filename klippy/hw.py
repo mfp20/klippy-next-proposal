@@ -50,7 +50,6 @@ class Manager:
                     node.module.load_node_object(self, node)
                 if not node.object:
                     logging.warning("\t\t- CAN'T LOAD: ..:%s:%s", node.node_get_parent(self.tree.printer, node.name).name, node.name)
-        #logging.debug(self.show())
         # build/configure (if needed) each printer shallow children
         logging.info("- Building and configuring objects.")
         for name,node in self.tree.printer.children.items():
@@ -62,26 +61,22 @@ class Manager:
                 if node.object:
                     # build printer's children
                     if hasattr(node.object, "build") and callable(node.object.build):
-                        #logging.debug("BUILD: %s", node.name)
                         node.object.build()
                     # configure printer's leaves
                     if hasattr(node.object, "configure") and callable(node.object.configure):
-                        #logging.debug("CONFIGURE: %s", node.name)
                         node.object.configure()
                 else:
                     logging.debug("(ERROR) %s, no object", node.name)
         # configure toolhead(s)
         for t in self.tree.printer.children_deep_byname("toolhead ", list()): 
-            #logging.debug("BUILD %s", t.name)
             if isinstance(t.object, instrument.Object):
                 t.object.build()
             else:
                 t.object.init()
         # init kinematics
         for k in self.tree.printer.children_deep_byname("kinematic ", list()):
-            #logging.debug("INIT %s %s", k.name, k.object)
             k.object.init()
-        # last check
+        # last check, and printer init
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if hasattr(node.object, "ready"):
                 if not node.object.ready:
@@ -89,7 +84,6 @@ class Manager:
             else:
                 if node.name != "printer":
                     logging.debug("\t %s NOT READY.", node.name)
-        #logging.debug(self.show())
         logging.info("- Registering events and commands.")
         # for each node, run object.register()
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
@@ -147,6 +141,14 @@ class Manager:
             logging.warning("(FIXME) No toolhead selected, returning first gcode in tree")
             thnode = self.tree.printer.child_get_first("toolhead ")
             return thnode.children["gcode "+thnode.get_id()].object
+    def get_my_gcode(self, child):
+        parent = child.node_get_parent(self, child.name)
+        if parent.name.startswith("toolhead "):
+            return parent.children["gcode "+parent.name.split(" ")[1]].object
+        else:
+            if parent.name == "printer":
+                return parent.children["commander"].object
+            return self.get_my_gcode(parent)
     def get_kinematic(self, name = None):
         if name:
             return self.get_node("kinematic "+name).object
@@ -154,6 +156,14 @@ class Manager:
             logging.warning("(FIXME) No toolhead selected, returning first kinematic in tree")
             thnode = self.tree.printer.child_get_first("toolhead ")
             return thnode.children["kinematic "+thnode.get_id()].object
+    def get_my_kinematic(self, child):
+        parent = child.node_get_parent(self, child.name)
+        if parent.name.startswith("kinematic "):
+            return parent.object
+        else:
+            if parent.name == "printer":
+                return None
+            return self.get_my_kinematic(parent)
     def del_node(self, name):
         self.tree.printer.del_node(name)
     def move_node(self, name, newparentname):

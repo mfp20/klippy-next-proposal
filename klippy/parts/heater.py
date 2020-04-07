@@ -19,7 +19,7 @@ class Object(part.Object):
             return
         tcnode = self.node.node_get_parent(self.hal.tree.printer, self.node.name)
         gov = tcnode.attr_get_choice("control", {"watermark": "watermark", "pid": "pid"})
-        self.max_power = tcnode.attr_get_float("power_max", default=1., above=0., maxval=1.)
+        self.max_power = self.node.attr_get_float("power_max", default=1., above=0., maxval=1.)
         if gov == "watermark" and self.max_power == 1.:
             self.pin = self.hal.get_controller().pin_setup("digital_out", self.node.attr_get("pin"))
         else:

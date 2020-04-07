@@ -8,16 +8,18 @@
 class AlwaysOff:
     def __init__(self):
         pass
-    def value_update(self, readtime, value, target, adj):
-        adj(readtime, 0.)
+    def value_update(self, readtime, sname, sensor, adj):
+        if adj:
+            adj(readtime, 0., sname)
     def check_busy(self, eventtime, smoothed, target):
         return False
 
 class AlwaysOn:
     def __init__(self):
         pass
-    def value_update(self, readtime, value, target, adj):
-        adj(readtime, 1.)
+    def value_update(self, readtime, sname, sensor, adj):
+        if adj:
+            adj(readtime, 1., sname)
     def check_busy(self, eventtime, smoothed, target):
         return True
 
@@ -26,7 +28,9 @@ class BangBang:
         self.delta = delta
         self.bang = maxpower
         self.acting = False
-    def value_update(self, readtime, value, target, adj):
+    def value_update(self, readtime, sname, sensor, adj):
+        value = sensor["current"]
+        target = sensor["target"]
         # evaluate
         if self.acting and value >= target+self.delta:
             self.acting = False
@@ -34,9 +38,11 @@ class BangBang:
             self.acting = True
         # output
         if self.acting:
-            adj(readtime, self.bang)
+            if adj:
+                adj(readtime, self.bang, sname)
         else:
-            adj(readtime, 0.)
+            if adj:
+                adj(readtime, 0., sname)
     def check_busy(self, eventtime, smoothed, target):
         return smoothed < target-self.delta
 
@@ -54,7 +60,9 @@ class PID:
         self.prev_value_time = 0.
         self.prev_value_deriv = 0.
         self.prev_value_integ = 0.
-    def value_update(self, readtime, value, target, adj):
+    def value_update(self, readtime, sname, sensor, adj):
+        value = sensor["current"]
+        target = sensor["target"]
         time_diff = readtime - self.prev_value_time
         # Calculate change of value
         value_diff = value - self.prev_value
@@ -72,7 +80,8 @@ class PID:
         #    value, readtime, value_diff, value_deriv, value_err, value_integ, co)
         bounded_co = max(0., min(self.max, co))
         # output
-        adj(readtime, bounded_co)
+        if adj:
+            adj(readtime, bounded_co, sname)
         # Store state for next measurement
         self.prev_value = value
         self.prev_value_time = readtime

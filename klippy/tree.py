@@ -37,6 +37,9 @@ class PrinterNode:
                 return str("")
     # get attr, with default fallback, limited amount of choices
     def attr_get_choice(self, attr, choices, default = None):
+        if None in choices:
+            choices["None"] = "None"
+            choices["none"] = "none"
         if default:
             c = self.attr_get(attr, default)
         else:

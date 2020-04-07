@@ -646,7 +646,9 @@ class CommandWrapper:
 
 class DummyMCU:
     # TODO
-    pass
+    def __init__(self, hal, node):
+        logging.warning("%s: Dummy", node.name)
+        pass
 
 class MCU:
     def __init__(self, hal, boardnode, clocksync):
@@ -894,10 +896,8 @@ class MCU:
         return self._serial.alloc_command_queue()
     def lookup_command(self, msgformat, cq=None):
         return CommandWrapper(self._serial, msgformat, cq)
-    def lookup_query_command(self, msgformat, respformat, oid=None,
-                             cq=None, async=False):
-        return CommandQueryWrapper(self._serial, msgformat, respformat, oid,
-                                   cq, async)
+    def lookup_query_command(self, msgformat, respformat, oid=None, cq=None, async=False):
+        return CommandQueryWrapper(self._serial, msgformat, respformat, oid, cq, async)
     def try_lookup_command(self, msgformat):
         try:
             return self.lookup_command(msgformat)
@@ -937,8 +937,7 @@ class MCU:
     def _restart_via_command(self):
         if ((self._reset_cmd is None and self._config_reset_cmd is None)
             or not self._clocksync.is_active()):
-            logging.info("Unable to issue reset command on MCU '%s'",
-                         self._name)
+            logging.info("Unable to issue reset command on MCU '%s'", self._name)
             return
         if self._reset_cmd is None:
             # Attempt reset via config_reset command
@@ -1105,7 +1104,7 @@ class Object(composite.Object):
     def connected(self):
         self.board_ready = self.board_ready + 1
         if self.board_ready == self.hal.mcu_count:
-            logging.info("* Printer Controller connected to MCU(s).")
+            #logging.debug("* Printer Controller connected to MCU(s).")
             logging.debug(self.hal.show())
         elif self.board_ready > self.hal.mcu_count:
             raise
