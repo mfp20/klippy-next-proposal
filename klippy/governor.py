@@ -5,6 +5,22 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
+class AlwaysOff:
+    def __init__(self):
+        pass
+    def value_update(self, readtime, value, target, adj):
+        adj(readtime, 0.)
+    def check_busy(self, eventtime, smoothed, target):
+        return False
+
+class AlwaysOn:
+    def __init__(self):
+        pass
+    def value_update(self, readtime, value, target, adj):
+        adj(readtime, 1.)
+    def check_busy(self, eventtime, smoothed, target):
+        return True
+
 class BangBang:
     def __init__(self, delta,  maxpower):
         self.delta = delta
@@ -47,7 +63,7 @@ class PID:
         else:
             value_deriv = (self.prev_value_deriv * (self.min_deriv_time-time_diff) + value_diff) / self.min_deriv_time
         # Calculate accumulated value "error"
-        value_err = target_value - value
+        value_err = target - value
         value_integ = self.prev_value_integ + value_err * time_diff
         value_integ = max(0., min(self.value_integ_max, value_integ))
         # Calculate output

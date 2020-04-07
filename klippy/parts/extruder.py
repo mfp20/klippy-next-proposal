@@ -20,7 +20,9 @@ class Dummy(composite.Object):
 
 class Object(composite.Object):
     def init(self):
-        pass
+        if self.ready:
+            return
+        self.ready = True
     def register(self):
         pass
 

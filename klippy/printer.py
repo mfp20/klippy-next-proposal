@@ -30,8 +30,6 @@ class Composer:
                     part.module = importlib.import_module("controller")
                 elif p == "sensor":
                     part.module = importlib.import_module("parts."+config.getsection(s.get_name()).get("type"))
-                elif p == "cooler":
-                    part.module = importlib.import_module("parts."+config.getsection(s.get_name()).get("type"))
                 else:
                     part.module = importlib.import_module("parts." + p)
                 parts[part.name] = part
@@ -177,7 +175,6 @@ class Main:
         Composer(config, self.hw)
         # load printer objects
         self.hw.load_tree_objects()
-        self.hw.register_ec()
     def _connect(self, eventtime):
         try:
             # parse config

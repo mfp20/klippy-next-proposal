@@ -50,6 +50,7 @@ class Manager:
                     node.module.load_node_object(self, node)
                 if not node.object:
                     logging.warning("\t\t- CAN'T LOAD: ..:%s:%s", node.node_get_parent(self.tree.printer, node.name).name, node.name)
+        #logging.debug(self.show())
         # for each printer shallow children, build/configure (if needed)
         logging.info("- Building and configuring objects.")
         for name,node in self.tree.printer.children.items():
@@ -57,19 +58,22 @@ class Manager:
                     and node.name != "commander" \
                     and node.name != "hal" \
                     and node.name != "controller" \
-                    and not node.name.startswith("toolhead"):
+                    and not node.name.startswith("kinematic "):
                 if node.object:
                     # build printer's children
                     if hasattr(node.object, "build") and callable(node.object.build):
+                        #logging.debug("BUILD: %s", node.name)
                         node.object.build()
                     # configure printer's leaves
                     if hasattr(node.object, "configure") and callable(node.object.configure):
+                        #logging.debug("CONFIGURE: %s", node.name)
                         node.object.configure()
                 else:
                     logging.debug("(ERROR) %s, no object", node.name)
         # configure toolhead(s)
         for t in self.tree.printer.children_deep_byname("toolhead ", list()): 
             if isinstance(t.object, instrument.Object):
+                #logging.debug("BUILD TOOLHEAD: %s", t.name)
                 t.object.build()
         # last check
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
@@ -80,12 +84,12 @@ class Manager:
                 if node.name != "printer":
                     logging.debug("\t %s NOT READY.", node.name)
         #logging.debug(self.show())
-    def register_ec(self):
         logging.info("- Registering events and commands.")
         # for each node, run object.register()
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if hasattr(node.object, "register") and callable(node.object.register):
                 node.object.register()
+        #logging.debug(self.show())
     def get_node(self, name):
         if name == "printer":
             return self.tree.printer
