@@ -1,4 +1,4 @@
-# Hydrometer support class.
+# Barometers support class.
 # 
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #

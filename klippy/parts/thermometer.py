@@ -346,11 +346,11 @@ class Dummy(sensor.Object):
     def configure(self):
         logging.warning("thermometer.Dummy:configure():%s", self.node.name)
         self.sensor = None
-    def setup_callback(self, temperature_callback):
+    def setup_cb(self, temperature_callback):
         self.temperature_callback = temperature_callback
     def get_report_time_delta(self):
         return REPORT_TIME
-    def adc_callback(self, read_time, read_value):
+    def cb(self, read_time, read_value):
         # TODO make a fake temp
         #temp = 
         #self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp)
@@ -437,18 +437,18 @@ class Object(sensor.Object):
                 self.sensor = SPI(params)
         # register thermometer
         self.mcu_adc = self.hal.get_controller().pin_setup("adc", self.node.attr_get("pin"))
-        self.mcu_adc.setup_adc_callback(REPORT_TIME, self.adc_callback)
+        self.mcu_adc.setup_callback(REPORT_TIME, self.cb)
         self.ready = True
-    def setup_callback(self, temperature_callback):
-        self.temperature_callback = temperature_callback
-    def get_report_time_delta(self):
-        return REPORT_TIME
-    def adc_callback(self, read_time, read_value):
-        temp = self.sensor.probe.calc_temp(read_value)
-        self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp)
     def setup_minmax(self, min_temp, max_temp):
         adc_range = [self.sensor.probe.calc_adc(t) for t in [min_temp, max_temp]]
         self.mcu_adc.setup_minmax(SAMPLE_TIME, SAMPLE_COUNT, minval=min(adc_range), maxval=max(adc_range), range_check_count=RANGE_CHECK_COUNT)
+    def setup_cb(self, temperature_callback):
+        self.temperature_callback = temperature_callback
+    def get_report_time_delta(self):
+        return REPORT_TIME
+    def cb(self, read_time, read_value):
+        temp = self.sensor.probe.calc_temp(read_value)
+        self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp)
 
 def load_node_object(hal, node):
     config_ok = True
