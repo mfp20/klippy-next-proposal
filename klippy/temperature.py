@@ -7,6 +7,7 @@
 import logging
 from messaging import msg
 from messaging import Kerr as error
+import governor
 
 '''
 logging.info(temperature.sensor_factories)
@@ -30,6 +31,8 @@ class Object:
         self.hal = hal
         self.node = hnode
     def init(self):
+        self.govoff = governor.AlwaysOff()
+        self.govon = governor.AlwaysOn()
         self.tcontroller = {}
         self.ready = True
     def register(self):
@@ -52,6 +55,7 @@ class Object:
         # register
         if gcode:
             self.tcontroller[gcode] = tc.object
+            # TODO register commands
         else:
             if tc.name == None:
                 raise error("Can't register temperature controller.")
@@ -60,8 +64,14 @@ class Object:
             self.tcontroller[tc.name] = tc.object
     def get_tc(self, name):
         return self.tcontroller[name]
-    def set_temp(name, temp):
-        self.get_tc(name).set_temp(temp)
+    def get_current_temp(tcname, sensorname = None):
+        tc = self.get_tc(tcname)
+        sensor = None
+        if sensorname:
+            sensor = tc.get_thermometer(sensorname)
+        return tc.get_temp(self.hal.get_reactor().monotonic(), sensor)
+    def set_target_temp(tcname, temp):
+        self.get_tc(tcname).set_temp(temp)
     # commands handlers
     def _off_all_heaters(self, print_time=0.):
         for tcontrol in self.tcontroller.values():
@@ -77,7 +87,7 @@ class Object:
         # TODO
         name = self.gcode.get_float('NAME', params, 0.)
         temp = self.gcode.get_float('TARGET', params, 0.)
-        self._set_temp(name, temp)
+        self._set_target_temp(name, temp)
     cmd_TEMPERATURE_HEATERS_OFF_help = "Turn off all heaters"
     def cmd_TEMPERATURE_HEATERS_OFF(self, params):
         self._off_all_heaters()

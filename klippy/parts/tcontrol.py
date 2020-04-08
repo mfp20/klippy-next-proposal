@@ -42,8 +42,8 @@ class Object(composite.Object):
         self.barometer = {}
         self.heater = {}
         self.cooler = {}
-        self.gov = self.govoff = governor.AlwaysOff()
-        self.govon = governor.AlwaysOn()
+        self.gov = self.govoff = self.hal.get_temperature().govoff
+        self.govon = self.hal.get_temperature().govon
         # timing
         self.lock = threading.Lock()
         self.smooth_time = self.node.attr_get_float("smooth_time", default=2., above=0.)
@@ -55,15 +55,15 @@ class Object(composite.Object):
         self.last_pwm_value = 0.
         # register all sensors, actuators off
         for t in self.children_bytype("sensor", "thermometer"):
-            self.register_thermometer(t)
+            self._register_thermometer(t)
         for h in self.children_bytype("sensor", "hygrometer"):
-            self.register_hygrometer(h)
+            self._register_hygrometer(h)
         for b in self.children_bytype("sensor", "barometer"):
-            self.register_barometer(b)
+            self._register_barometer(b)
         for h in self.children_bygroup("heater"):
-            self.register_heater(h)
+            self._register_heater(h)
         for c in self.children_bygroup("cooler"):
-            self.register_cooler(c)
+            self._register_cooler(c)
         #logging.debug("CAPAS: temperature(%s), humidity(%s), pressure(%s), heat(%s), cool(%s)", self.capas["temperature"], self.capas["humidity"], self.capas["pressure"], self.capas["heat"], self.capas["cool"])
         #logging.debug("MANGLE: thermometer(%d), hygrometer(%d), barometer(%d), heater(%d), cooler(%d)", len(self.thermometer), len(self.hygrometer), len(self.barometer), len(self.heater), len(self.cooler))
         # mangle sensor-heater-cooler relations and setup safe governors:
@@ -72,10 +72,10 @@ class Object(composite.Object):
         #   - more complex relations must be established later on (ex: when the parent is init'ed)
         if len(self.thermometer) > 0:
             if len(self.heater) == 0 and len(self.cooler) == 0:
-                #logging.debug("Pure sensor, no temperature adjust (%s)", self.node.name)
+                logging.debug("Pure sensor, no temperature adjust (%s)", self.node.name)
                 pass
             elif len(self.heater) > 0 and len(self.cooler) == 0 and not self.capas["humidity"] and not self.capas["pressure"]:
-                #logging.debug("Pure heater (%s)", self.node.name)
+                logging.debug("Pure heater (%s)", self.node.name)
                 # get maximum allowable power among all heaters
                 maxpower = 1.
                 for h in self.heater.values():
@@ -89,7 +89,7 @@ class Object(composite.Object):
                 # first thermometer in command
                 self.thermometer[next(iter(self.thermometer))]["gov"] = gov
             elif (len(self.heater) == 0) and (len(self.cooler) > 0) and not self.capas["humidity"] and not self.capas["pressure"]:
-                #logging.debug("Pure cooler (%s)", self.node.name)
+                logging.debug("Pure cooler (%s)", self.node.name)
                 # get maximum allowable power among all coolers
                 maxpower = 1.
                 for c in self.cooler.values():
@@ -102,7 +102,7 @@ class Object(composite.Object):
                 # first thermometer in command
                 self.thermometer[next(iter(self.thermometer))]["gov"] = gov
             elif len(self.thermometer) == len(self.heater) and len(self.heater) == len(self.cooler):
-                #logging.debug("Thermometer (%d), heater (%d), cooler (%d)", len(self.thermometer), len(self.heater), len(self.cooler))
+                logging.debug("Thermometer (%d), heater (%d), cooler (%d), (%s)", len(self.thermometer), len(self.heater), len(self.cooler), self.node.name)
                 # get maximum allowable power among all heaters
                 maxpower = 1.
                 for h in self.heater.values():
@@ -123,7 +123,7 @@ class Object(composite.Object):
             else:
                 raise error("Unknown sensors(%d)-actuators(%d) combo." % (len(self.thermometer)+len(self.hygrometer)+len(self.barometer), len(self.heater)+len(self.cooler)))
         elif len(self.thermometer) == 0:
-            #logging.debug("Misc sensors, heaters/coolers always off (%s)." % self.node.name)
+            logging.debug("No Thermometer, misc sensors/heaters/coolers, always off (%s)." % self.node.name)
             for h in self.heater:
                 self.heater[c]["gov"] = self.govoff
             for c in self.cooler:
@@ -154,7 +154,8 @@ class Object(composite.Object):
             else:
                 startvalue = self.node.attr_get_float("temp_ambient", default=25., above=4., maxval=100.)
             return governor.PID(kp, ki, kd, max_power, self.smooth_time, imax, startvalue)
-    def register_thermometer(self, node):
+    # register objects
+    def _register_thermometer(self, node):
         # set defaults
         self.thermometer[node.name] = OBJ.copy()
         self.thermometer[node.name]["pin"] = node.object
@@ -166,12 +167,12 @@ class Object(composite.Object):
         self.thermometer[node.name]["smoothed"] = 0.
         # setup sensor
         node.object.setup_minmax(self.thermometer[node.name]["min"],  self.thermometer[node.name]["max"])
-        node.object.setup_cb(self.temperature_callback)
+        node.object.setup_cb(self._temperature_callback)
         self.set_pwm_delay(self.thermometer[node.name]["pin"].get_report_time_delta())
         # adapt max temp (in case this part can't withstand higher temperatures)
         self.alter_max_temp(node.attr_get_float("max", default=ALUMINIUM_OPERATING, above=self.thermometer[node.name]["min"]))
         self.capas["temperature"] = True
-    def register_hygrometer(self, node):
+    def _register_hygrometer(self, node):
         # set defaults
         self.hygrometer[node.name] = OBJ.copy()
         self.hygrometer[node.name]["pin"] = node.object
@@ -186,7 +187,7 @@ class Object(composite.Object):
         # adapt max temp (in case this part can't withstand higher temperatures)
         self.alter_max_temp(node.attr_get_float("temp_max", default=ALUMINIUM_OPERATING, above=self.hygrometer[node.name]["min"]))
         self.capas["humidity"] = True
-    def register_barometer(self, node):
+    def _register_barometer(self, node):
         # set defaults
         self.barometer[node.name] = OBJ.copy()
         self.barometer[node.name]["pin"] = node.object
@@ -201,7 +202,7 @@ class Object(composite.Object):
         # adapt max temp (in case this part can't withstand higher temperatures)
         self.alter_max_temp(node.attr_get_float("temp_max", default=ALUMINIUM_OPERATING, above=self.barometer[node.name]["min"]))
         self.capas["pressure"] = True
-    def register_heater(self, node):
+    def _register_heater(self, node):
         if isinstance(node.object.pin, controller.MCU_pwm):
             pwm_cycle_time = self.node.attr_get_float("pwm_cycle_time", default=-1.100, above=0., maxval=self.pwm_delay)
             node.object.pin.setup_cycle_time(pwm_cycle_time)
@@ -218,7 +219,7 @@ class Object(composite.Object):
         # adapt max temp (in case this part can't withstand higher temperatures)
         self.alter_max_temp(node.attr_get_float("temp_max", default=ALUMINIUM_OPERATING, above=self.heater[node.name]["min"]))
         self.capas["heat"] = True
-    def register_cooler(self, node):
+    def _register_cooler(self, node):
         # set defaults
         self.cooler[node.name] = OBJ.copy()
         self.cooler[node.name]["pin"] = node.object
@@ -231,6 +232,17 @@ class Object(composite.Object):
         # adapt max temp (in case this part can't withstand higher temperatures)
         self.alter_max_temp(node.attr_get_float("temp_max", default=ALUMINIUM_OPERATING, above=self.cooler[node.name]["min"]))
         self.capas["cool"] = True
+    # get objects
+    def get_thermometer(name):
+        return self.thermometer[name]
+    def get_hygrometer(name):
+        return self.hygrometer[name]
+    def get_barometer(name):
+        return self.barometer[name]
+    def get_heater(name):
+        return self.heater[name]
+    def get_cooler(name):
+        return self.cooler[name]
     # sensors values
     def _get_value(self, eventtime, sensor):
             print_time = sensor["pin"].get_mcu().estimated_print_time(eventtime) - 5.
@@ -309,13 +321,15 @@ class Object(composite.Object):
             else:
                 cvalue = 0.
             # apply
+            logging.debug("%s coolers pwm value: %s", self.node.name, cvalue)
             c.pin.set_pwm(pwm_time, cvalue)
-    # set both pwm output value (coolers are a "moderated" inverse of heaters)
+    # set both pwm output value
     def set_output(self, pwm_time, value, sensorname):
         self.set_heaters(pwm_time, value, sensorname)
         self.set_coolers(pwm_time, value, sensorname)
     # adjust temp by modifying pwm output
-    def adj_temp(self, read_time, value, sensorname):
+    def _adj_temp(self, read_time, value, sensorname):
+        logging.debug("%s governor pwm value: %s", self.node.name, value)
         sensor = self.thermometer[sensorname]
         # off
         if sensor["target"] <= 0.:
@@ -332,8 +346,8 @@ class Object(composite.Object):
         logging.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])", self.node.name, value, pwm_time, sensor["current"], self.last_time, sensor["target"])
         # output
         self.set_output(pwm_time, value, sensorname)
-    #
-    def temperature_callback(self, read_time, temp, sensorname):
+    # called from the 
+    def _temperature_callback(self, read_time, temp, sensorname):
         if sensorname in self.thermometer:
             sensor = self.thermometer[sensorname]
         else:
@@ -345,7 +359,7 @@ class Object(composite.Object):
                 sensor["current"] = temp
                 sensor["last"] = self.last_time = read_time
                 # heaters&coolers, adjust temperature
-                sensor["gov"].value_update(read_time, sensorname, sensor, self.adj_temp)
+                sensor["gov"].value_update(read_time, sensorname, sensor, self._adj_temp)
                 #
                 temp_diff = temp - sensor["smoothed"]
                 adj_time = min(time_diff * self.inv_smooth_time, 1.)
@@ -357,7 +371,7 @@ class Object(composite.Object):
                 sensor["last"] = read_time
         # TODO check they are updated
         #logging.debug("%s: current=%s time=%s", sensorname, sensor["current"], sensor["last"])
-    def humidity_callback(self, read_time, hum, sensorname):
+    def _humidity_callback(self, read_time, hum, sensorname):
         if sensorname in self.hygrometer:
             sensor = self.hygrometer[sensorname]
         else:
@@ -365,7 +379,7 @@ class Object(composite.Object):
         with self.lock:
             sensor["current"] = hum
             sensor["last"] = read_time
-    def pressure_callback(self, read_time, press, sensorname):
+    def _pressure_callback(self, read_time, press, sensorname):
         if sensorname in self.barometer:
             sensor = self.barometer[sensorname]
         else:
@@ -376,7 +390,6 @@ class Object(composite.Object):
     #
     def avoid_dew(self):
         self.alter_min_temp(self.calc_dew_point())
-        pass
     def get_max_power(self):
         return self.max_power
     def get_pwm_delay(self):
@@ -385,7 +398,7 @@ class Object(composite.Object):
         self.pwm_delay = min(self.pwm_delay, pwm_delay)
     def get_smooth_time(self):
         return self.smooth_time
-    def set_temp(self, degrees, sensor = None):
+    def set_target_temp(self, degrees, sensor = None):
         if not sensor:
             sensor = self.thermometer[next(iter(self.thermometer))]
         if degrees and (degrees < self.min_temp or degrees > self.max_temp):
@@ -393,11 +406,11 @@ class Object(composite.Object):
         with self.lock:
             sensor["target"] = degrees
     def set_off_heaters(self, degrees):
+        # TODO
         logging.warning("TODO set_off_heaters")
-        pass
     def set_off_coolers(self, degrees):
+        # TODO
         logging.warning("TODO set_off_coolers")
-        pass
     def check_busy(self, eventtime, sensor = None):
         if not sensor:
             sensor = self.thermometer[next(iter(self.thermometer))]

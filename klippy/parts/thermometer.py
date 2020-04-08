@@ -5,7 +5,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, bisect, math
+import logging, bisect, math, random
 from messaging import msg
 from messaging import Kerr as error
 import sensor
@@ -344,22 +344,72 @@ class Dummy(sensor.Object):
         sensor.Object(hal,node)
         logging.warning("thermometer.Dummy:__init__():%s", self.node.name)
     def configure(self):
-        logging.warning("thermometer.Dummy:configure():%s", self.node.name)
         self.sensor = None
+        self.simul_min = None
+        self.simul_max = None
+        self.simul_samples = None
+        self.simul_inverted = False
+        self.simul_list = list()
+        self.simul_last = None
+        self.simul_under = 0
+        self.simul_over = 0
+    def setup_minmax(self, min_temp, max_temp):
+        self.simul_min = min_temp
+        self.simul_max = max_temp
+        self.simul_samples = int((max_temp-min_temp)/2)
     def setup_cb(self, temperature_callback):
         self.temperature_callback = temperature_callback
+    # make a new list of bounded random numbers
+    def simul_temp_mklist(self, startno):
+        i = 0
+        if not self.simul_list:
+            while (i<self.simul_samples):
+                self.simul_list.append(startno)
+                i = i + 1
+            i = 0
+        self.simul_list[i] = startno
+        while (i<self.simul_samples):
+            if self.simul_inverted:
+                self.simul_list[i] = self.simul_list[i-1] - (random.randrange(0, 2)+random.random())
+                if self.simul_list[i] <= self.simul_min:
+                    self.simul_under = self.simul_under + 1
+                    self.simul_list[i] = self.simul_min
+            else:
+                self.simul_list[i] = self.simul_list[i-1] + (random.randrange(0, 2)+random.random())
+                if self.simul_list[i] >= self.simul_max:
+                    self.simul_over = self.simul_over + 1
+                    self.simul_list[i] = self.simul_max
+            i = i + 1
+        self.simul_last = 0
+    # invert increasing/decreasing
+    def simul_temp_invert(self, last):
+        if self.simul_inverted:
+            self.simul_inverted = False
+        else:
+            self.simul_inverted = True
+        self.simul_temp_mklist(last)
+    # returns next sample
+    def simul_temp_get(self):
+        if self.simul_last < (len(self.simul_list)-1):
+            self.simul_last = self.simul_last + 1
+        else:
+            self.simul_temp_invert(self.simul_list[self.simul_last])
+        return self.simul_list[self.simul_last]
+    # generates a start random float between min+(1/3 distance to max) and max-(1/3 distance to min)
+    def simul_temp_mkstart(self):
+        start = random.randint(self.simul_min+((self.simul_max-self.simul_min)/3),self.simul_max-((self.simul_max-self.simul_min)/3))+random.random()
+        self.simul_temp_mklist(start)
+        return start
+    # starts the random temperature generation and returns the first sample
+    def simul_temp(self):
+        if not self.simul_list:
+            self.simul_temp_mkstart()
+        return self.simul_temp_get()
+    def _cb(self, read_time, read_value):
+        temp = self.simul_temp()
+        self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, self.simul_temp())
     def get_report_time_delta(self):
         return REPORT_TIME
-    def cb(self, read_time, read_value):
-        # TODO make a fake temp
-        #temp = 
-        #self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp)
-        pass
-    def setup_minmax(self, min_temp, max_temp):
-        # TODO make a fake adc_range
-        #adc_range = 
-        #self.pin.setup_minmax(SAMPLE_TIME, SAMPLE_COUNT, minval=min(adc_range), maxval=max(adc_range), range_check_count=RANGE_CHECK_COUNT)
-        pass
 
 # TODO attrs checks for each model of sensor
 # TODO test custom sensors
@@ -437,18 +487,18 @@ class Object(sensor.Object):
                 self.sensor = SPI(params)
         # register thermometer
         self.pin = self.hal.get_controller().pin_setup("adc", self.node.attr_get("pin"))
-        self.pin.setup_callback(REPORT_TIME, self.cb)
+        self.pin.setup_callback(REPORT_TIME, self._cb)
         self.ready = True
     def setup_minmax(self, min_temp, max_temp):
         adc_range = [self.sensor.probe.calc_adc(t) for t in [min_temp, max_temp]]
         self.pin.setup_minmax(SAMPLE_TIME, SAMPLE_COUNT, minval=min(adc_range), maxval=max(adc_range), range_check_count=RANGE_CHECK_COUNT)
     def setup_cb(self, temperature_callback):
         self.temperature_callback = temperature_callback
-    def get_report_time_delta(self):
-        return REPORT_TIME
-    def cb(self, read_time, read_value):
+    def _cb(self, read_time, read_value):
         temp = self.sensor.probe.calc_temp(read_value)
         self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp, self.node.name)
+    def get_report_time_delta(self):
+        return REPORT_TIME
 
 def load_node_object(hal, node):
     config_ok = True

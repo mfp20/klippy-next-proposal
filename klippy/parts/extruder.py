@@ -6,12 +6,11 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
+from messaging import msg
+from messaging import Kerr as error
 import composite
 
-attrs = ("type", "filament_diameter", "min_extrude_temp")
-
-class error(Exception):
-    pass
+ATTRS = ("type", "filament_diameter", "min_extrude_temp")
 
 class Dummy(composite.Object):
     def __init__(self, hal, node):
@@ -28,7 +27,7 @@ class Object(composite.Object):
 
 def load_node_object(hal, node):
     config_ok = True
-    for a in node.module.attrs:
+    for a in node.module.ATTRS:
         if a not in node.attrs:
             config_ok = False
             break
@@ -36,5 +35,4 @@ def load_node_object(hal, node):
         node.object = Object(hal, node)
     else:
         node.object = Dummy(hal, node)
-
 
