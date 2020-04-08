@@ -10,6 +10,10 @@ from messaging import msg
 from messaging import Kerr as error
 import composite, controller, governor
 
+#
+# Tcontrol
+#
+
 ATTRS = ("type", "min", "max", "control")
 
 class Dummy(composite.Object):
@@ -66,12 +70,10 @@ class Object(composite.Object):
             self._register_heater(h)
         for c in self.children_bygroup("cooler"):
             self._register_cooler(c)
-        #logging.debug("CAPAS: temperature(%s), humidity(%s), pressure(%s), heat(%s), cool(%s)", self.capas["temperature"], self.capas["humidity"], self.capas["pressure"], self.capas["heat"], self.capas["cool"])
-        #logging.debug("MANGLE: thermometer(%d), hygrometer(%d), barometer(%d), heater(%d), cooler(%d)", len(self.thermometer), len(self.hygrometer), len(self.barometer), len(self.heater), len(self.cooler))
         # mangle sensor-heater-cooler relations and setup safe governors:
         #   - first thermometer actuate heaters/coolers
-        #   - if no thermomether heaters/coolers stay off
-        #   - more complex relations must be established later on (ex: when the parent is init'ed)
+        #   - if no thermomether, heaters/coolers stay off
+        #   - more complex relations must be established in other ways
         if len(self.thermometer) > 0:
             if len(self.heater) == 0 and len(self.cooler) == 0:
                 logging.debug("Pure sensor, no temperature adjust (%s)", self.node.name)
@@ -209,6 +211,7 @@ class Object(composite.Object):
             pwm_cycle_time = self.node.attr_get_float("pwm_cycle_time", default=-1.100, above=0., maxval=self.pwm_delay)
             node.object.pin.setup_cycle_time(pwm_cycle_time)
         node.object.pin.setup_max_duration(MAX_HEAT_TIME)
+        #self.printer.try_load_module(config, "pid_calibrate")
         # set defaults
         self.heater[node.name] = OBJ.copy()
         self.heater[node.name]["pin"] = node.object
@@ -278,25 +281,6 @@ class Object(composite.Object):
             return _get_value(eventtime, sensor)
         else:
             raise error("Requested pressure sensor reading but '%s' doesn't have any pressure sensor!!!", self.node.name)
-    # calc dew point
-    def calc_dew_point(self):
-        # celsius
-        temp = next(iter(self.thermometer))["smoothed"]
-        # relative humidity
-        hygro = next(iter(self.hygrometer))["smoothed"]
-        if temp and hygro:
-            if hygro > 50:
-                # simple formula accurate for humidity > 50%
-                # Lawrence, Mark G., 2005: The relationship between relative humidity and the dewpoint temperature in moist air: A simple conversion and applications. Bull. Amer. Meteor. Soc., 86, 225-233
-                return (temp-((100-hygro)/5))
-            else:
-                # http://en.wikipedia.org/wiki/Dew_point
-                a = 17.271;
-                b = 237.7;
-                temp2 = (a * temp) / (b + temp) + math.log(hygro*0.01);
-                return ((b * temp2) / (a - temp2))
-        else:
-            raise error("Requested the dew temperature but '%s' doesn't have the needed sensors!!!", self.node.name)
     # set heaters pwm output value
     def set_heaters(self, pwm_time, value, sensorname):
         for h in self.heater.value():
@@ -348,7 +332,7 @@ class Object(composite.Object):
         logging.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])", self.node.name, value, pwm_time, sensor["current"], self.last_time, sensor["target"])
         # output
         self.set_output(pwm_time, value, sensorname)
-    # called from the 
+    # 
     def _temperature_callback(self, read_time, temp, sensorname):
         if sensorname in self.thermometer:
             sensor = self.thermometer[sensorname]
@@ -389,9 +373,29 @@ class Object(composite.Object):
         with self.lock:
             sensor["current"] = press
             sensor["last"] = read_time
-    #
+    # calc dew point
+    def calc_dew_point(self):
+        # celsius
+        temp = next(iter(self.thermometer))["smoothed"]
+        # relative humidity
+        hygro = next(iter(self.hygrometer))["smoothed"]
+        if temp and hygro:
+            if hygro > 50:
+                # simple formula accurate for humidity > 50%
+                # Lawrence, Mark G., 2005: The relationship between relative humidity and the dewpoint temperature in moist air: A simple conversion and applications. Bull. Amer. Meteor. Soc., 86, 225-233
+                return (temp-((100-hygro)/5))
+            else:
+                # http://en.wikipedia.org/wiki/Dew_point
+                a = 17.271;
+                b = 237.7;
+                temp2 = (a * temp) / (b + temp) + math.log(hygro*0.01);
+                return ((b * temp2) / (a - temp2))
+        else:
+            raise error("Requested the dew temperature but '%s' doesn't have the needed sensors!!!", self.node.name)
+    # set min to avoid dew
     def avoid_dew(self):
         self.alter_min_temp(self.calc_dew_point())
+    # 
     def get_max_power(self):
         return self.max_power
     def get_pwm_delay(self):
