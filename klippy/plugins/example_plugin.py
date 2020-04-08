@@ -18,7 +18,7 @@
 
 # mandatory options for this module configuration section
 # note: it's a python tuple! ie: in case of no options must write "tuple()", in case of single option remember to place a comma at the end within the parenthesis
-attrs = ("option1",)
+ATTRS = ("option1",)
 
 # simple part: class ExampleModule(part.Object):
 # composite part: class ExampleModule(composite.Object):

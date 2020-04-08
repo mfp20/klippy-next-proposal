@@ -1,6 +1,5 @@
-# Printer composited parts.
+# Support for cart composite part.
 #
-# Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -13,10 +12,13 @@ import composite
 ATTRS = ()
 
 class Dummy(composite.Object):
-    def __init__(self, hal, cnode):
-        logging.warning("Dummy: %s", cnode.name)
-        self.hal = hal
-        self.node = cnode
+    def __init__(self, hal, node):
+        composite.Object.__init__(self, hal, node)
+        logging.warning("(%s) cart.Dummy", node.name)
+    def init():
+        if self.ready:
+            return
+        self.ready = True
 
 class Object(composite.Object):
     def init(self):
@@ -25,13 +27,8 @@ class Object(composite.Object):
         self.ready = True
 
 def load_node_object(hal, node):
-    config_ok = True
-    for a in node.module.ATTRS:
-        if a not in node.attrs:
-            config_ok = False
-            break
-    if config_ok:
+    if node.attrs_check():
         node.object = Object(hal, node)
     else:
-        node.object = Dummy(hal, node)
+        node.object = Dummy(hal,node)
 

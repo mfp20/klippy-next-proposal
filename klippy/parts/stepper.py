@@ -1,6 +1,7 @@
 # Printer stepper support
 #
 # Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
@@ -8,8 +9,6 @@ import logging, math
 from messaging import msg
 from messaging import Kerr as error
 import part, chelper
-
-attrs = ("type",)
 
 # Interface to low-level mcu and chelper code
 class MCU_stepper:
@@ -67,10 +66,7 @@ class MCU_stepper:
         min_stop_interval = max(0., self._min_stop_interval - max_error)
         self._mcu.add_config_cmd(
             "config_stepper oid=%d step_pin=%s dir_pin=%s"
-            " min_stop_interval=%d invert_step=%d" % (
-                self._oid, self._step_pin, self._dir_pin,
-                self._mcu.seconds_to_clock(min_stop_interval),
-                self._invert_step))
+            " min_stop_interval=%d invert_step=%d" % (self._oid, self._step_pin, self._dir_pin, self._mcu.seconds_to_clock(min_stop_interval), self._invert_step))
         self._mcu.add_config_cmd("reset_step_clock oid=%d clock=0" % (self._oid,), is_init=True)
         step_cmd_id = self._mcu.lookup_command_id("queue_step oid=%c interval=%u count=%hu add=%hi")
         dir_cmd_id = self._mcu.lookup_command_id("set_next_step_dir oid=%c dir=%c")
@@ -156,8 +152,24 @@ class MCU_stepper:
         return self._ffi_lib.itersolve_is_active_axis(
             self._stepper_kinematics, axis)
 
+#
+# Stepper object
+#
+
+ATTRS = ("type", "step_distance")
+ATTRS_PINS = ("pin_step", "pin_dir", "pin_enable")
+ATTRS_I2C = ("pin_sda", "pin_scl", "addr")
+ATTRS_SPI = ("pin_miso", "pin_mosi", "pin_sck", "pin_cs")
+
 class Dummy(part.Object):
-    pass
+    def __init__(self, hal, node):
+        part.Object.__init__(self, hal, node)
+        logging.warning("(%s) stepper.Dummy", node.name)
+    def configure():
+        if self.ready:
+            return
+        # TODO 
+        self.ready = True
 
 # Helper code to build a stepper object from hal
 class Object(part.Object):
@@ -177,5 +189,18 @@ class Object(part.Object):
         self.ready = True
 
 def load_node_object(hal, node):
-    node.object = Object(hal, node)
+    if node.attrs_check():
+        if node.attrs["type"] == "pins":
+            if node.attrs_check("pins"):
+                node.object = Object(hal, node)
+                return
+        elif node.attrs["type"] == "i2c":
+            if node.attrs_check("i2c"):
+                node.object = Object(hal, node)
+                return
+        elif node.attrs["type"] == "spi":
+            if node.attrs_check("spi"):
+                node.object = Object(hal, node)
+                return
+    node.object = Dummy(hal,node)
 

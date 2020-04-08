@@ -1,5 +1,6 @@
 # Sensors support classes.
 # 
+# Copyright (C) 2016-2020  Kevin O'Connor <kevin@koconnor.net>
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -7,8 +8,7 @@
 import logging
 import sensor, controller
 
-ATTRS = ("type", "pin")
-
+# Interface to low-level mcu and chelper code
 class MCU_endstop:
     RETRY_QUERY = 1.000
     def __init__(self, mcu, pin_params):
@@ -116,8 +116,22 @@ class MCU_endstop:
         params = self._query_cmd.send([self._oid], minclock=clock)
         return params['pin_value'] ^ self._invert
 
+#
+# Endstop
+#
+
+ATTRS = ("type", "pin")
+
+# TODO 
 class Dummy(sensor.Object):
-    pass
+    def __init__(self, hal, node):
+        sensor.Object.__init__(self, hal, node)
+        logging.warning("(%s) endstop.Dummy", node.name)
+    def configure():
+        if self.ready:
+            return
+        self.sensor = None
+        self.ready = True
 
 class Object(sensor.Object):
     def configure(self):
@@ -125,14 +139,10 @@ class Object(sensor.Object):
             return
         self.sensor = self.hal.get_controller().pin_setup("endstop", self.node.attrs["pin"])
         self.ready = True
+
 def load_node_object(hal, node):
-    config_ok = True
-    for a in node.module.ATTRS:
-        if a not in node.attrs:
-            config_ok = False
-            break
-    if config_ok:
+    if node.attrs_check():
         node.object = Object(hal, node)
     else:
-        node.object = Dummy(hal, node)
+        node.object = Dummy(hal,node)
 

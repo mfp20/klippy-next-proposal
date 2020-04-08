@@ -338,12 +338,14 @@ SAMPLE_COUNT = 8
 REPORT_TIME = 0.300
 RANGE_CHECK_COUNT = 4
 
-# TODO
+# TODO: change the current random generation with a PID
 class Dummy(sensor.Object):
     def __init__(self, hal, node):
         sensor.Object(hal,node)
-        logging.warning("thermometer.Dummy:__init__():%s", self.node.name)
+        logging.warning("(%s) thermometer.Dummy", self.node.name)
     def configure(self):
+        if self.ready:
+            return
         self.sensor = None
         self.simul_min = None
         self.simul_max = None
@@ -353,6 +355,7 @@ class Dummy(sensor.Object):
         self.simul_last = None
         self.simul_under = 0
         self.simul_over = 0
+        self.ready = True
     def setup_minmax(self, min_temp, max_temp):
         self.simul_min = min_temp
         self.simul_max = max_temp
@@ -501,13 +504,8 @@ class Object(sensor.Object):
         return REPORT_TIME
 
 def load_node_object(hal, node):
-    config_ok = True
-    for a in node.module.ATTRS:
-        if a not in node.attrs:
-            config_ok = False
-            break
-    if config_ok:
+    if node.attrs_check():
         node.object = Object(hal, node)
     else:
-        node.object = Dummy(hal, node)
+        node.object = Dummy(hal,node)
 

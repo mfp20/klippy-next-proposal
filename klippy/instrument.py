@@ -13,9 +13,8 @@ import logging, math
 from messaging import msg
 from messaging import Kerr as error
 import composite, chelper
-from kinematics import dummy
-from kinematics import extruder
-
+from kinematics.dummy import Object as DummyKinematic
+from kinematics.extruder import Dummy as DummyExtruder
 
 # Class to track each move request
 class Move:
@@ -201,7 +200,7 @@ ATTRS = ("x", "y", "z", "max_velocity", "max_accel", "max_z_velocity", "max_z_ac
 class Dummy(composite.Object):
     def __init__(self, hal, node):
 	composite.Object.__init__(self,hal, node)
-        logging.warning("instrument.Dummy:__init__():%s", self.node.name)
+        logging.warning("(%s) instrument.Dummy", self.node.name)
     def init(self):
         if self.ready:
             return
@@ -209,9 +208,9 @@ class Dummy(composite.Object):
     def register(self):
         pass
     def move(self, newpos, speed):
-        logging.warning("instrument.Dummy:move():%s", self.node.name)
+        pass
     def get_position(self):
-        logging.warning("instrument.Dummy:get_position():%s", self.node.name)
+        pass
 
 # Main code to track events (and their timing) on the printer toolhead
 class Object(composite.Object):
@@ -264,7 +263,7 @@ class Object(composite.Object):
         self.trapq_free_moves = ffi_lib.trapq_free_moves
         self.step_generators = []
         # Create kinematics class
-        self.extruder = extruder.DummyExtruder()
+        self.extruder = DummyExtruder()
         # Load some default modules
         #self.printer.try_load_module(config, "idle_timeout")
         #self.printer.try_load_module(config, "statistics")
@@ -590,5 +589,5 @@ def load_node_object(hal, node):
         node.object = Dummy(hal, node)
         # force dummy kinematic too
         kin = node.node_get_parent(hal.tree.printer, node.name)
-        kin.object = dummy.Object(hal, kin)
+        kin.object = DummyKinematic(hal, kin)
 

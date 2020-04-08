@@ -6,12 +6,25 @@
 
 import sensor
 
-attrs = ("type", "pin")
+ATTRS = ("type", "pin")
+
+# TODO 
+class Dummy(sensor.Object):
+    def __init__(self, hal, node):
+        sensor.Object.__init__(self, hal, node)
+        logging.warning("(%s) barometer.Dummy", node.name)
+    def configure():
+        if self.ready:
+            return
+        self.ready = True
 
 class Object(sensor.Object):
     def configure(self):
         pass
 
 def load_node_object(hal, node):
-    node.object = Object(hal, node)
+    if node.attrs_check():
+        node.object = Object(hal, node)
+    else:
+        node.object = Dummy(hal,node)
 

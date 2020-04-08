@@ -86,10 +86,14 @@ class PrinterNode:
                 return float(default)
             else:
                 raise error("Unable to parse option '%s' in node '%s'" % (attr, self.name))
-    def attrs_check(self):
+    def attrs_check(self, attrs = None):
         if self.module:
-            if hasattr(self.module, "ATTRS"):
-                for a in self.module.ATTRS:
+            if attrs:
+                myattrs = "ATTRS_"+attrs.upper()
+            else:
+                myattrs = "ATTRS"
+            if hasattr(self.module, myattrs):
+                for a in getattr(self.module, myattrs):
                     if a not in self.attrs:
                         if self.name:
                             logging.warning("No option '%s' for node %s", a, self.name)

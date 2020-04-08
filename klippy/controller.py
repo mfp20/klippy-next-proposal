@@ -130,7 +130,7 @@ Beagleboneblack_mappings = {
 re_pin = re.compile(r'(?P<prefix>[ _]pin=)(?P<name>[^ ]*)')
 
 # manages pins on a single board (mcu)
-class Pin:
+class Pins:
     def __init__(self, hal, boardnode, validate_aliases=True):
         self.hal = hal
         self.validate_aliases = validate_aliases
@@ -644,12 +644,6 @@ class CommandWrapper:
         cmd = self._cmd.encode(data)
         self._serial.raw_send(cmd, minclock, reqclock, self._cmd_queue)
 
-class DummyMCU:
-    # TODO
-    def __init__(self, hal, node):
-        logging.warning("%s: Dummy", node.name)
-        pass
-
 class MCU:
     def __init__(self, hal, boardnode, clocksync):
         self.hal = hal
@@ -1000,22 +994,30 @@ class MCU:
 ######################################################################
 
 ATTRS = ("serial", "baud", "pin_map", "restart_method")
-class Board(part.Object):
-    def init(self):
-        # pin
-        self.pin = Pin(self.hal, self.node)
-        # mcu
-        if self.node.attrs_check():
-            if self.hal.mcu_count == 0:
-                self.mcu = MCU(self.hal, self.node, self.hal.get_timing())
-            else:
-                self.mcu = MCU(self.hal, self.node, timing.Secondary(self.hal.get_reactor(), self.hal.get_timing()))
-        else:
-            self.mcu = DummyMCU(self.hal, self.node)
-            self.node.attr_set("dummy", True)
-        self.hal.mcu_count = self.hal.mcu_count + 1
-        self.hal.get_printer().register_event_handler("board:"+self.node.get_id()+":configured", self.mcu_ready)
+
+# TODO
+class Dummy(part.Object):
+    def __init__(self, hal, node):
+        part.Object.__init__(self,hal,node)
+        logging.warning("(%s) controller.Dummy (dummy Board)", self.node.name)
         self.ready = True
+    def register(self):
+        pass
+
+class Board(part.Object):
+    def __init__(self, hal, node):
+        part.Object.__init__(self,hal,node)
+        # pin
+        self.pin = Pins(self.hal, self.node)
+        # mcu
+        if self.hal.mcu_count == 0:
+            self.mcu = MCU(self.hal, self.node, self.hal.get_timing())
+        else:
+            self.mcu = MCU(self.hal, self.node, timing.Secondary(self.hal.get_reactor(), self.hal.get_timing()))
+        self.hal.mcu_count = self.hal.mcu_count + 1
+        self.ready = True
+    def register(self):
+        self.hal.get_printer().register_event_handler("board:"+self.node.get_id()+":configured", self.mcu_ready)
     def mcu_ready(self):
         self.hal.get_printer().send_event("controller:connected")
     def pin_parse(self, pin_desc, can_invert=False, can_pullup=False):
@@ -1088,12 +1090,9 @@ class Board(part.Object):
 # Controller: multiboard mapper (was "PrinterPins")
 ######################################################################
 
-class Dummy:
-    # TODO
-    pass
-
 class Object(composite.Object):
-    def init(self):
+    def __init__(self, hal, node):
+        composite.Object.__init__(self,hal,node)
         self.board = {}
         self.board_ready = 0
         self.ready = True
@@ -1108,12 +1107,14 @@ class Object(composite.Object):
             logging.debug(self.hal.show())
         elif self.board_ready > self.hal.mcu_count:
             raise
-    def register_board(self, bnode):
+    def register_board(self, bnode, dummy = False):
         bname = bnode.get_id()
         if bname in self.board:
             raise error("Duplicate mcu name '%s'" % bname)
-        self.board[bname] = bnode.object = Board(self.hal, bnode)
-        self.board[bname].init()
+        if dummy:
+            self.board[bname] = bnode.object = Dummy(self.hal, bnode)
+        else:
+            self.board[bname] = bnode.object = Board(self.hal, bnode)
     def list_mcus(self):
         mcus = list()
         for b in self.board:
@@ -1147,7 +1148,9 @@ class Object(composite.Object):
 def load_node_object(hal, node):
     if node.name == "controller":
         node.object = Object(hal, node)
-        node.object.init()
     elif node.name.startswith("mcu "):
-        hal.get_controller().register_board(node)
+        if node.attrs_check():
+            hal.get_controller().register_board(node)
+        else:
+            hal.get_controller().register_board(node, True)
 

@@ -14,11 +14,13 @@ ATTRS = ("type", "min", "max", "control")
 
 class Dummy(composite.Object):
     def __init__(self, hal, node):
-        logging.warning("tcontrol.Dummy:__init__():%s", node.name)
-        composite.Object(hal, node)
+        composite.Object.__init__(self, hal, node)
+        logging.warning("(%s) tcontrol.Dummy", node.name)
     def init():
         if self.ready:
             return
+        # TODO 
+        self.hal.get_temperature().tc_register(self.node)
         self.ready = True
     def register(self):
         pass
@@ -452,13 +454,8 @@ class Object(composite.Object):
         return {'temperature': smoothed_temp, 'target': target_temp}
 
 def load_node_object(hal, node):
-    config_ok = True
-    for a in node.module.ATTRS:
-        if a not in node.attrs:
-            config_ok = False
-            break
-    if config_ok:
+    if node.attrs_check():
         node.object = Object(hal, node)
     else:
-        node.object = Dummy(hal, node)
+        node.object = Dummy(hal,node)
 

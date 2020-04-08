@@ -110,7 +110,9 @@ class Composer:
     def compose_toolhead(self, config, parts):
         name = config.get_name()
         knode = tree.PrinterNode("kinematic "+name.split(" ")[1])
-        knode.module = importlib.import_module('kinematics.' + config.getsection(name).get("kinematics"))
+        ktype = config.getsection(name).get("kinematics")
+        knode.attr_set("type", ktype)
+        knode.module = importlib.import_module('kinematics.' + ktype)
         toolhead = tree.PrinterNode(name)
         toolhead.module = importlib.import_module("instrument")
         toolhead.child_set(tree.PrinterNode("gcode "+name.split(" ")[1]))

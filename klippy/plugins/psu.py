@@ -7,15 +7,22 @@
 import logging,collections
 import part
 
-attrs = ("volt", "power", "pin_pg")
+ATTRS = ("volt", "power", "pin_pg")
 
+# TODO 
 class Dummy(part.Object):
     def __init__(self, hal, node):
-        logging.warning("Dummy:__init__:%s", node.name)
-        part.Object(self, hal, node)
+        part.Object.__init__(self, hal, node)
+        logging.warning("(%s) tcontrol.Dummy", node.name)
+    def configure():
+        if self.ready:
+            return
+        self.ready = True
 
 class Object(part.Object):
     def configure(self):
+        if self.ready:
+            return 
         self.ready = True
 
 def load_tree_node(hal, node, parts):
@@ -31,13 +38,8 @@ def load_tree_node(hal, node, parts):
     return used_parts
 
 def load_node_object(hal, node):
-    config_ok = True
-    for a in node.module.attrs:
-        if a not in node.attrs:
-            config_ok = False
-            break
-    if config_ok:
+    if node.attrs_check():
         node.object = Object(hal, node)
     else:
-        node.object = Dummy(hal, node)
+        node.object = Dummy(hal,node)
 

@@ -4,7 +4,22 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-class PrinterExtruder:
+ATTRS = ()
+
+class Dummy:
+    def update_move_time(self, flush_time):
+        pass
+    def check_move(self, move):
+        raise homing.EndstopMoveError(
+            move.end_pos, "Extrude when no extruder present")
+    def calc_junction(self, prev_move, move):
+        return move.max_cruise_v2
+    def get_name(self):
+        return ""
+    def get_heater(self):
+        raise homing.CommandError("Extruder not configured")
+
+class Object:
     def __init__(self, config, extruder_num):
         self.printer = config.get_printer()
         self.name = config.get_name()
@@ -195,20 +210,6 @@ class PrinterExtruder:
         toolhead.set_extruder(self, self.stepper.get_commanded_position())
         self.printer.send_event("extruder:activate_extruder")
 
-# Dummy extruder class used when a printer has no extruder at all
-class DummyExtruder:
-    def update_move_time(self, flush_time):
-        pass
-    def check_move(self, move):
-        raise homing.EndstopMoveError(
-            move.end_pos, "Extrude when no extruder present")
-    def calc_junction(self, prev_move, move):
-        return move.max_cruise_v2
-    def get_name(self):
-        return ""
-    def get_heater(self):
-        raise homing.CommandError("Extruder not configured")
-
 def add_printer_objects(config):
     printer = config.get_printer()
     for i in range(99):
@@ -219,3 +220,10 @@ def add_printer_objects(config):
             break
         pe = PrinterExtruder(config.getsection(section), i)
         printer.add_object(section, pe)
+
+def load_node_object(hal, node):
+    if node.attrs_check():
+        node.object = Object(hal, node)
+    else:
+        node.object = Dummy(hal,node)
+

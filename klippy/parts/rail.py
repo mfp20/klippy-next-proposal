@@ -10,19 +10,19 @@ from messaging import msg
 from messaging import Kerr as error
 import composite
 
-ATTRS = ("position_min", "position_endstop_min", "position_max")
+ATTRS = ("position_min", "position_max")
 
+# TODO 
 class Dummy(composite.Object):
-    def __init__(self, hal, rnode):
-        logging.warning("Dummy: %s", rnode.name)
-        self.hal = hal
-        self.node = rnode
-    def get(self, need_position_minmax=True, default_position_endstop=None, units_in_radians=False):
-        self.stepper_units_in_radians = units_in_radians
-        self.steppers = []
-        self.endstops = []
-        # TODO
-        return self
+    def __init__(self, hal, node):
+        composite.Object.__init__(self, hal, node)
+        logging.warning("(%s) rail.Dummy", node.name)
+    def init():
+        if self.ready:
+            return
+        self.ready = True
+    def register(self):
+        pass
 
 # A motor control "rail" with one (or more) steppers and one (or more) endstops.
 class Object(composite.Object):
@@ -58,6 +58,8 @@ class Object(composite.Object):
         self.setup_homing()
         self.ready = True
         return self
+    def register(self):
+        pass
     def setup_position_endstop(self, default_position_endstop = None):
         self.default_position_endstop = default_position_endstop
         mcu_endstop = self.endstops[0][0]
@@ -127,13 +129,9 @@ class Object(composite.Object):
             stepper.set_position(coord)
 
 def load_node_object(hal, node):
-    config_ok = True
-    for a in node.module.ATTRS:
-        if a not in node.attrs:
-            config_ok = False
-            break
-    if config_ok:
+    if node.attrs_check():
         node.object = Object(hal, node)
     else:
-        node.object = Dummy(hal, node)
+        node.object = Dummy(hal,node)
+
 

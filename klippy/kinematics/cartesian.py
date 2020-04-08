@@ -7,8 +7,9 @@
 
 import logging
 import hw, composite, instrument
+from kinematics.dummy import Object as Dummy
 
-ATTRS = ()
+ATTRS = ("type",)
 
 class Object(composite.Object):
     def init(self):
@@ -184,6 +185,8 @@ def load_tree_node(hal, knode, parts):
     return used_parts
 
 def load_node_object(hal, node):
-    #logging.debug("LOAD %s", node.name)
-    node.object = Object(hal, node)
+    if node.attrs_check():
+        node.object = Object(hal, node)
+    else:
+        node.object = Dummy(hal,node)
 
