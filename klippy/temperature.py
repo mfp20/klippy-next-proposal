@@ -30,7 +30,6 @@ class Object:
     def __init__(self, hal, hnode):
         self.hal = hal
         self.node = hnode
-    def init(self):
         self.govoff = governor.AlwaysOff()
         self.govon = governor.AlwaysOn()
         self.tcontroller = {}
@@ -103,5 +102,4 @@ class Object:
 
 def load_node_object(hal, node):
     node.object = Object(hal, node)
-    node.object.init()
 

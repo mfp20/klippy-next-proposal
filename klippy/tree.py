@@ -96,15 +96,15 @@ class PrinterNode:
                 for a in getattr(self.module, myattrs):
                     if a not in self.attrs:
                         if self.name:
-                            logging.warning("No option '%s' for node %s", a, self.name)
+                            logging.warning("AttrsCheck: No option '%s' for node '%s'", a, self.name)
                         return False
             else:
                 if self.name:
-                    logging.warning("No attrs for node '%s'", self.name)
+                    logging.warning("AttrsCheck: No attrs for node '%s'", self.name)
                 return False
         else:
             if self.name:
-                logging.warning("No module for node '%s'", self.name)
+                logging.warning("AttrsCheck: No module for node '%s'", self.name)
             return False
         return True
     # add new child
