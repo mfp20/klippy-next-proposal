@@ -243,6 +243,13 @@ class PrinterNode:
         if node == None: node = self
         txt = ""
         matrix = node.object.pin.matrix()
+        # registered serial handlers
+        if len(node.object.mcu._serial.handlers) > 0:
+            txt = txt + "\t"*(indent+1) + "------------ (serial handlers)\n"
+            txt = txt + "\t"*indent + "\t(name, oid)\t\t(callback)\n"
+            for h in sorted(node.object.mcu._serial.handlers):
+                txt = txt + str("\t" * indent + "\t" + str(h).ljust(20, " ") + "\t" + str(node.object.mcu._serial.handlers[h]) + "\n")
+        # available pins and their config
         if len(matrix) > 0:
             txt = txt + "\t"*(indent+1) + "------------------- (all pins)\n"
             txt = txt + "\t"*indent + "\t(pin)\t(alias)\t(task)\t(pull)\t(invert)\n"
