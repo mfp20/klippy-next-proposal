@@ -26,8 +26,7 @@ class BME280:
         self.printer = config.get_printer()
         self.name = config.get_name().split()[-1]
         self.reactor = self.printer.get_reactor()
-        self.i2c = bus.MCU_I2C_from_config(
-            config, default_addr=BME280_CHIP_ADDR, default_speed=100000)
+        self.i2c = bus.MCU_I2C_from_config(config, default_addr=BME280_CHIP_ADDR, default_speed=100000)
         self.os_temp = config.getint('bme280_oversample_temp', 2)
         self.os_hum = config.getint('bme280_oversample_hum', 2)
         self.os_pres = config.getint('bme280_oversample_pressure', 2)

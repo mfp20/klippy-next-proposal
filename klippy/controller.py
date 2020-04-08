@@ -133,6 +133,7 @@ re_pin = re.compile(r'(?P<prefix>[ _]pin=)(?P<name>[^ ]*)')
 class Pins:
     def __init__(self, hal, boardnode, validate_aliases=True):
         self.hal = hal
+        self._name = boardnode.get_id()
         self.validate_aliases = validate_aliases
         # all pins
         self.name = list()
@@ -279,6 +280,37 @@ class MCU_digital_out:
     def set_pwm(self, print_time, value):
         self.set_digital(print_time, value >= 0.5)
 
+# Bus synchronized digital outputs
+#   Helper code for a gpio that updates on a cmd_queue
+class MCU_digital_out_queued:
+    def __init__(self, mcu, pin_desc, cmd_queue=None, value=0):
+        self.mcu = mcu
+        self.oid = mcu.create_oid()
+        ppins = hal.get_controller()
+        pin_params = ppins.get_pin(pin_desc)
+        if pin_params['chip'] is not mcu:
+            raise ppins.error("Pin %s must be on mcu %s" % (pin_desc, mcu.get_name()))
+        mcu.add_config_cmd("config_digital_out oid=%d pin=%s value=%d default_value=%d max_duration=%d" % (self.oid, pin_params['pin'], value, value, 0))
+        mcu.register_config_callback(self.build_config)
+        if cmd_queue is None:
+            cmd_queue = mcu.alloc_command_queue()
+        self.cmd_queue = cmd_queue
+        self.update_pin_cmd = None
+    def get_oid(self):
+        return self.oid
+    def get_mcu(self):
+        return self.mcu
+    def get_command_queue(self):
+        return self.cmd_queue
+    def build_config(self):
+        self.update_pin_cmd = self.mcu.lookup_command("update_digital_out oid=%c value=%c", cq=self.cmd_queue)
+    def update_digital_out(self, value, minclock=0, reqclock=0):
+        if self.update_pin_cmd is None:
+            # Send setup message via mcu initialization
+            self.mcu.add_config_cmd("update_digital_out oid=%c value=%c" % (self.oid, not not value))
+            return
+        self.update_pin_cmd.send([self.oid, not not value], minclock=minclock, reqclock=reqclock)
+
 class MCU_pwm:
     def __init__(self, mcu, pin_params):
         self._mcu = mcu
@@ -392,32 +424,49 @@ class MCU_adc:
         if self._callback is not None:
             self._callback(last_read_time, last_value)
 
-def resolve_bus_name(mcu, param, bus):
-    # Find enumerations for the given bus
-    enumerations = mcu.get_enumerations()
-    enums = enumerations.get(param, enumerations.get('bus'))
-    if enums is None:
-        if bus is None:
-            return 0
-        return bus
-    # Verify bus is a valid enumeration
-    ppins = hal.get_controller()
-    mcu_name = mcu.get_name()
-    if bus is None:
-        rev_enums = {v: k for k, v in enums.items()}
-        if 0 not in rev_enums:
-            raise ppins.error("Must specify %s on mcu '%s'" % (param, mcu_name))
-        bus = rev_enums[0]
-    if bus not in enums:
-        raise ppins.error("Unknown %s '%s'" % (param, bus))
-    # Check for reserved bus pins
-    constants = mcu.get_constants()
-    reserve_pins = constants.get('BUS_PINS_%s' % (bus,), None)
-    pin_resolver = ppins.get_pin_resolver(mcu_name)
-    if reserve_pins is not None:
-        for pin in reserve_pins.split(','):
-            pin_resolver.reserve_pin(pin, bus)
-    return bus
+# Helper code for working with devices connected to an MCU via an I2C bus
+class MCU_i2c:
+    def __init__(self, mcu, bus, addr, speed):
+        self.mcu = mcu
+        self.bus = bus
+        self.i2c_address = addr
+        self.oid = self.mcu.create_oid()
+        self.config_fmt = "config_i2c oid=%d i2c_bus=%%s rate=%d address=%d" % (self.oid, speed, addr)
+        self.cmd_queue = self.mcu.alloc_command_queue()
+        self.mcu.register_config_callback(self.build_config)
+        self.i2c_write_cmd = self.i2c_read_cmd = self.i2c_modify_bits_cmd = None
+    def get_oid(self):
+        return self.oid
+    def get_mcu(self):
+        return self.mcu
+    def get_i2c_address(self):
+        return self.i2c_address
+    def get_command_queue(self):
+        return self.cmd_queue
+    def build_config(self):
+        bus = resolve_bus_name(self.mcu, "i2c_bus", self.bus)
+        self.mcu.add_config_cmd(self.config_fmt % (bus,))
+        self.i2c_write_cmd = self.mcu.lookup_command("i2c_write oid=%c data=%*s", cq=self.cmd_queue)
+        self.i2c_read_cmd = self.mcu.lookup_query_command("i2c_read oid=%c reg=%*s read_len=%u", "i2c_read_response oid=%c response=%*s", oid=self.oid, cq=self.cmd_queue)
+        self.i2c_modify_bits_cmd = self.mcu.lookup_command("i2c_modify_bits oid=%c reg=%*s clear_set_bits=%*s", cq=self.cmd_queue)
+    def i2c_write(self, data, minclock=0, reqclock=0):
+        if self.i2c_write_cmd is None:
+            # Send setup message via mcu initialization
+            data_msg = "".join(["%02x" % (x,) for x in data])
+            self.mcu.add_config_cmd("i2c_write oid=%d data=%s" % (self.oid, data_msg), is_init=True)
+            return
+        self.i2c_write_cmd.send([self.oid, data], minclock=minclock, reqclock=reqclock)
+    def i2c_read(self, write, read_len):
+        return self.i2c_read_cmd.send([self.oid, write, read_len])
+    def i2c_modify_bits(self, reg, clear_bits, set_bits, minclock=0, reqclock=0):
+        clearset = clear_bits + set_bits
+        if self.i2c_modify_bits_cmd is None:
+            # Send setup message via mcu initialization
+            reg_msg = "".join(["%02x" % (x,) for x in reg])
+            clearset_msg = "".join(["%02x" % (x,) for x in clearset])
+            self.mcu.add_config_cmd("i2c_modify_bits oid=%d reg=%s clear_set_bits=%s" % (self.oid, reg_msg, clearset_msg), is_init=True)
+            return
+        self.i2c_modify_bits_cmd.send([self.oid, reg, clearset], minclock=minclock, reqclock=reqclock)
 
 # Helper code for working with devices connected to an MCU via an SPI bus
 class MCU_spi:
@@ -463,121 +512,6 @@ class MCU_spi:
         self.spi_send_cmd.send([self.oid, data], minclock=minclock, reqclock=reqclock)
     def spi_transfer(self, data):
         return self.spi_transfer_cmd.send([self.oid, data])
-
-# Helper to setup an spi bus from settings in a config section
-def MCU_spi_from_config(config, mode, pin_option="cs_pin", default_speed=100000):
-    # Determine pin from config
-    ppins = hal.get_controller()
-    cs_pin = config.get(pin_option)
-    cs_pin_params = ppins.get_pin(cs_pin)
-    pin = cs_pin_params['pin']
-    if pin == 'None':
-        ppins.reset_pin_sharing(cs_pin_params)
-        pin = None
-    # Load bus parameters
-    mcu = cs_pin_params['chip']
-    speed = config.getint('spi_speed', default_speed, minval=100000)
-    if config.get('spi_software_sclk_pin', None) is not None:
-        sw_pin_names = ['spi_software_%s_pin' % (name,) for name in ['miso', 'mosi', 'sclk']]
-        sw_pin_params = [ppins.get_pin(config.get(name), share_type=name) for name in sw_pin_names]
-        for pin_params in sw_pin_params:
-            if pin_params['chip'] != mcu:
-                raise ppins.error("%s: spi pins must be on same mcu" % (config.get_name(),))
-        sw_pins = tuple([pin_params['pin'] for pin_params in sw_pin_params])
-        bus = None
-    else:
-        bus = config.get('spi_bus', None)
-        sw_pins = None
-    # Create MCU_SPI object
-    return MCU_SPI(mcu, bus, pin, mode, speed, sw_pins)
-
-# Helper code for working with devices connected to an MCU via an I2C bus
-class MCU_i2c:
-    def __init__(self, mcu, bus, addr, speed):
-        self.mcu = mcu
-        self.bus = bus
-        self.i2c_address = addr
-        self.oid = self.mcu.create_oid()
-        self.config_fmt = "config_i2c oid=%d i2c_bus=%%s rate=%d address=%d" % (self.oid, speed, addr)
-        self.cmd_queue = self.mcu.alloc_command_queue()
-        self.mcu.register_config_callback(self.build_config)
-        self.i2c_write_cmd = self.i2c_read_cmd = self.i2c_modify_bits_cmd = None
-    def get_oid(self):
-        return self.oid
-    def get_mcu(self):
-        return self.mcu
-    def get_i2c_address(self):
-        return self.i2c_address
-    def get_command_queue(self):
-        return self.cmd_queue
-    def build_config(self):
-        bus = resolve_bus_name(self.mcu, "i2c_bus", self.bus)
-        self.mcu.add_config_cmd(self.config_fmt % (bus,))
-        self.i2c_write_cmd = self.mcu.lookup_command("i2c_write oid=%c data=%*s", cq=self.cmd_queue)
-        self.i2c_read_cmd = self.mcu.lookup_query_command("i2c_read oid=%c reg=%*s read_len=%u", "i2c_read_response oid=%c response=%*s", oid=self.oid, cq=self.cmd_queue)
-        self.i2c_modify_bits_cmd = self.mcu.lookup_command("i2c_modify_bits oid=%c reg=%*s clear_set_bits=%*s", cq=self.cmd_queue)
-    def i2c_write(self, data, minclock=0, reqclock=0):
-        if self.i2c_write_cmd is None:
-            # Send setup message via mcu initialization
-            data_msg = "".join(["%02x" % (x,) for x in data])
-            self.mcu.add_config_cmd("i2c_write oid=%d data=%s" % (self.oid, data_msg), is_init=True)
-            return
-        self.i2c_write_cmd.send([self.oid, data], minclock=minclock, reqclock=reqclock)
-    def i2c_read(self, write, read_len):
-        return self.i2c_read_cmd.send([self.oid, write, read_len])
-    def i2c_modify_bits(self, reg, clear_bits, set_bits, minclock=0, reqclock=0):
-        clearset = clear_bits + set_bits
-        if self.i2c_modify_bits_cmd is None:
-            # Send setup message via mcu initialization
-            reg_msg = "".join(["%02x" % (x,) for x in reg])
-            clearset_msg = "".join(["%02x" % (x,) for x in clearset])
-            self.mcu.add_config_cmd("i2c_modify_bits oid=%d reg=%s clear_set_bits=%s" % (self.oid, reg_msg, clearset_msg), is_init=True)
-            return
-        self.i2c_modify_bits_cmd.send([self.oid, reg, clearset], minclock=minclock, reqclock=reqclock)
-
-def MCU_i2c_from_config(config, default_addr=None, default_speed=100000):
-    # Load bus parameters
-    printer = config.get_printer()
-    i2c_mcu = mcu.get_printer_mcu(printer, config.get('i2c_mcu', 'mcu'))
-    speed = config.getint('i2c_speed', default_speed, minval=100000)
-    bus = config.get('i2c_bus', None)
-    if default_addr is None:
-        addr = config.getint('i2c_address', minval=0, maxval=127)
-    else:
-        addr = config.getint('i2c_address', default_addr, minval=0, maxval=127)
-    # Create MCU_I2C object
-    return MCU_I2C(i2c_mcu, bus, addr, speed)
-
-# Bus synchronized digital outputs
-#   Helper code for a gpio that updates on a cmd_queue
-class MCU_bus_digital_out:
-    def __init__(self, mcu, pin_desc, cmd_queue=None, value=0):
-        self.mcu = mcu
-        self.oid = mcu.create_oid()
-        ppins = hal.get_controller()
-        pin_params = ppins.get_pin(pin_desc)
-        if pin_params['chip'] is not mcu:
-            raise ppins.error("Pin %s must be on mcu %s" % (pin_desc, mcu.get_name()))
-        mcu.add_config_cmd("config_digital_out oid=%d pin=%s value=%d default_value=%d max_duration=%d" % (self.oid, pin_params['pin'], value, value, 0))
-        mcu.register_config_callback(self.build_config)
-        if cmd_queue is None:
-            cmd_queue = mcu.alloc_command_queue()
-        self.cmd_queue = cmd_queue
-        self.update_pin_cmd = None
-    def get_oid(self):
-        return self.oid
-    def get_mcu(self):
-        return self.mcu
-    def get_command_queue(self):
-        return self.cmd_queue
-    def build_config(self):
-        self.update_pin_cmd = self.mcu.lookup_command("update_digital_out oid=%c value=%c", cq=self.cmd_queue)
-    def update_digital_out(self, value, minclock=0, reqclock=0):
-        if self.update_pin_cmd is None:
-            # Send setup message via mcu initialization
-            self.mcu.add_config_cmd("update_digital_out oid=%c value=%c" % (self.oid, not not value))
-            return
-        self.update_pin_cmd.send([self.oid, not not value], minclock=minclock, reqclock=reqclock)
 
 # Class to retry sending of a query command until a given response is received
 class RetryAsyncCommand:
@@ -746,21 +680,36 @@ class MCU:
             if not line:
                 continue
             self.add_config_cmd(line)
+    # applies pin_fixup to all "pin" occurrences in the given command
+    def command_translate(self, cmd):
+        def pin_fixup(m):
+            name = m.group('name')
+            if name in self._board.pin.alias:
+                pin_id = self._board.pin.alias2name(name)
+                pin_params = self._board.pin.active.pop(name)
+                pin_params["pin"] = pin_id
+                self._board.pin.active[pin_id] = pin_params
+                index = self._board.pin.alias.index(name)
+                self._board.pin.invert[index] = pin_params["invert"]
+                self._board.pin.pull[index] = pin_params["pullup"]
+            else:
+                pin_id = name
+            if pin_id in self._board.pin.reserved:
+                raise error("pin %s is reserved for %s" % (name, self._board.pin.reserved[pin_id]))
+            return m.group('prefix') + str(pin_id)
+        return re_pin.sub(pin_fixup, cmd)
+    #
     def _send_config(self, prev_crc):
         # Build config commands
         for cb in self._config_callbacks:
             cb()
         self._add_custom()
-        self._config_cmds.insert(0, "allocate_oids count=%d" % (
-            self._oid_count,))
-        # Resolve pin names
-        mcu_type = self._serial.get_msgparser().get_constant('MCU')
-        if self._pin_map is not None:
-            self._board.pin.init(mcu_type, self._pin_map)
+        self._config_cmds.insert(0, "allocate_oids count=%d" % (self._oid_count,))
+        #
         for i, cmd in enumerate(self._config_cmds):
-            self._config_cmds[i] = self._board.command_translate(cmd)
+            self._config_cmds[i] = self.command_translate(cmd)
         for i, cmd in enumerate(self._init_cmds):
-            self._init_cmds[i] = self._board.command_translate(cmd)
+            self._init_cmds[i] = self.command_translate(cmd)
         # Calculate config CRC
         config_crc = zlib.crc32('\n'.join(self._config_cmds)) & 0xffffffff
         self.add_config_cmd("finalize_config crc=%d" % (config_crc,))
@@ -822,8 +771,10 @@ class MCU:
         logging.debug(move_msg)
         log_info = self._log_info() + "\n" + move_msg
         self.hal.get_printer().set_rollover_info(self._name, log_info, log=False)
+        # board configured
         self.hal.get_printer().send_event("board:"+self._name+":configured")
     def _mcu_identify(self):
+        # load MCU
         if self.is_fileoutput():
             self._connect_file()
         else:
@@ -837,10 +788,7 @@ class MCU:
             except serialhdl.error as e:
                 raise error(str(e))
         logging.info(self._log_info())
-        for cname, value in self.get_constants().items():
-            if cname.startswith("RESERVE_PINS_"):
-                for pin in value.split(','):
-                    self.hal.get_controller().board[self._name].pin_reserve(pin, cname[13:])
+        #
         self._mcu_freq = self.get_constant_float('CLOCK_FREQ')
         self._stats_sumsq_base = self.get_constant_float('STATS_SUMSQ_BASE')
         self._emergency_stop_cmd = self.lookup_command("emergency_stop")
@@ -853,6 +801,8 @@ class MCU:
         self.register_response(self._handle_shutdown, 'shutdown')
         self.register_response(self._handle_shutdown, 'is_shutdown')
         self.register_response(self._handle_mcu_stats, 'stats')
+        # board identified
+        self.hal.get_printer().send_event("board:"+self._name+":identified", self._name)
     # Config creation helpers
     def setup_pin(self, pin_type, pin_params):
         pcs = {'endstop': MCU_endstop, 'digital_out': MCU_digital_out, 'pwm': MCU_pwm, 'adc': MCU_adc}
@@ -990,7 +940,7 @@ class MCU:
         self._disconnect()
 
 ######################################################################
-# Board := {mcu, pins, ...}
+# Board := {mcu, pins, uart, i2c, spi, ...}
 ######################################################################
 
 ATTRS = ("serial", "baud", "pin_map", "restart_method")
@@ -1007,8 +957,11 @@ class Dummy(part.Object):
 class Board(part.Object):
     def __init__(self, hal, node):
         part.Object.__init__(self,hal,node)
-        # pin
         self.pin = Pins(self.hal, self.node)
+        self.uart = collections.OrderedDict()
+        self.i2c = collections.OrderedDict()
+        self.spi = collections.OrderedDict()
+    def init(self):
         # mcu
         if self.hal.mcu_count == 0:
             self.mcu = MCU(self.hal, self.node, self.hal.get_timing())
@@ -1017,9 +970,35 @@ class Board(part.Object):
         self.hal.mcu_count = self.hal.mcu_count + 1
         self.ready = True
     def register(self):
-        self.hal.get_printer().register_event_handler("board:"+self.node.get_id()+":configured", self.mcu_ready)
-    def mcu_ready(self):
-        self.hal.get_printer().send_event("controller:connected")
+        self.hal.get_printer().register_event_handler("board:"+self.node.get_id()+":identified", self._identified)
+        self.hal.get_printer().register_event_handler("board:"+self.node.get_id()+":configured", self._configured)
+    # events handlers
+    def _identified(self, mcuname):
+        # init pins
+        self.mcu._mcu_type = self.mcu._serial.get_msgparser().get_constant('MCU')
+        self.pin.init(self.mcu._mcu_type, self.mcu._pin_map)
+        # parse constants (ex: )
+        for cname, value in self.mcu.get_constants().items():
+            # ex: RESERVE_PINS_serial
+            if cname.startswith("RESERVE_PINS_"):
+                for pin in value.split(','):
+                    self.pin_reserve(pin, cname[13:])
+        # TODO
+        # get uart
+        # get available i2c
+        #enumerations = self.hal.get_node("mcu "+self.node.get_id()).object.mcu.get_enumerations()
+        #i2c = enumerations.get("i2c_bus", enumerations.get('bus'))
+        #for i in i2c:
+        #    self.bus_reserve()
+        #    self.bus_setup_i2c()
+        # get available spi
+        #spi = enumerations.get("spi_bus", enumerations.get('bus'))
+        #for s in spi:
+        #    self.bus_reserve()
+        #    self.bus_setup_spi()
+    def _configured(self):
+        self.hal.get_printer().send_event("controller:ready")
+    #
     def pin_parse(self, pin_desc, can_invert=False, can_pullup=False):
         desc = pin_desc.strip()
         pullup = invert = 0
@@ -1066,25 +1045,46 @@ class Board(part.Object):
     def pin_reset_sharing(self, pin_params):
         share_name = "%s" % (pin_params['chip_name'], pin_params['pin'])
         del self.pin.active[share_name]
-    # applies pin_fixup to all "pin" occurrences in the given command
-    def command_translate(self, cmd):
-        def pin_fixup(m):
-            name = m.group('name')
-            if name in self.pin.alias:
-                pin_id = self.pin.alias2name(name)
-                logging.debug("(%s) pin %s is an alias for %s" % (self.node.name, name, pin_id))
-                pin_params = self.pin.active.pop(name)
-                pin_params["pin"] = pin_id
-                self.pin.active[pin_id] = pin_params
-                index = self.pin.alias.index(name)
-                self.pin.invert[index] = pin_params["invert"]
-                self.pin.pull[index] = pin_params["pullup"]
-            else:
-                pin_id = name
-            if pin_id in self.pin.reserved:
-                raise error("pin %s is reserved for %s" % (name, self.pin.reserved[pin_id]))
-            return m.group('prefix') + str(pin_id)
-        return re_pin.sub(pin_fixup, cmd)
+    def bus_reserve(self, bus):
+        reserve_pins = self.mcu.get_constants().get('BUS_PINS_%s' % (bus,), None)
+        if reserve_pins is not None:
+            for pin in reserve_pins.split(','):
+                self.pin_reserve(pin, bus)
+    def bus_setup_i2c(self, busname = 0, default_speed = 100000, default_addr = None):
+        # TODO
+        # Load bus parameters
+        bus = self.node.attr_get("i2c_bus", default=busname)
+        speed = self.node.attr_get_int("i2c_speed", default=default_speed, minval=100000)
+        if default_addr is None:
+            addr = self.node.attr_get_int("i2c_address", minval=0, maxval=127)
+        else:
+            addr = self.node.attr_get_int("i2c_address", default=default_addr, minval=0, maxval=127)
+        # create i2c
+        self.i2c[bus] = MCU_i2c(self.mcu, bus, addr, speed)
+    def bus_setup_spi(self, mode, busname = 0, pin_option="cs_pin", default_speed=100000):
+        # TODO
+        cs_pin = self.node.attr_get(pin_option)
+        cs_pin_params = self.hal.get_controller().get_pin(cs_pin)
+        pin = cs_pin_params["pin"]
+        if pin == "None":
+            self.hal.get_controller().reset_pin_sharing(cs_pin_params)
+            pin = None
+        # Load bus parameters
+        mcu = cs_pin_params["chip"]
+        speed = self.node.attr_get_int("spi_speed", default=default_speed, minval=100000, maxval=4000000)
+        if self.node.attr_get("spi_software_sclk_pin", None) is not None:
+            sw_pin_names = ["spi_software_%s_pin" % (name,) for name in ["miso", "mosi", "sclk"]]
+            sw_pin_params = [self.hal.get_controller().get_pin(self.hal.attr_get(name), share_type=name) for name in sw_pin_names]
+            for pin_params in sw_pin_params:
+                if pin_params["chip"] != mcu:
+                    raise error("%s: spi pins must be on same mcu" % (self.node.name,))
+            sw_pins = tuple([pin_params["pin"] for pin_params in sw_pin_params])
+            bus = None
+        else:
+            bus = self.node.attr_get("spi_bus", default=None)
+            sw_pins = None
+        # create spi
+        self.spi[bus] = MCU_spi(self.mcu, bus, pin, mode, speed, sw_pins)
 
 ######################################################################
 # Controller: multiboard mapper (was "PrinterPins")
@@ -1097,16 +1097,9 @@ class Object(composite.Object):
         self.board_ready = 0
         self.ready = True
     def register(self):
-        self.hal.get_printer().register_event_handler("controller:connected", self.connected)
+        self.hal.get_printer().register_event_handler("controller:ready", self._ready)
         self.hal.get_commander().register_command('SHOW_PINS_ALL', self.cmd_SHOW_PINS_ALL, desc=self.cmd_SHOW_PINS_ALL_help)
         self.hal.get_commander().register_command('SHOW_PINS_ACTIVE', self.cmd_SHOW_PINS_ACTIVE, desc=self.cmd_SHOW_PINS_ACTIVE_help)
-    def connected(self):
-        self.board_ready = self.board_ready + 1
-        if self.board_ready == self.hal.mcu_count:
-            #logging.debug("* Printer Controller connected to MCU(s).")
-            logging.debug(self.hal.show())
-        elif self.board_ready > self.hal.mcu_count:
-            raise
     def register_board(self, bnode, dummy = False):
         bname = bnode.get_id()
         if bname in self.board:
@@ -1115,6 +1108,16 @@ class Object(composite.Object):
             self.board[bname] = bnode.object = Dummy(self.hal, bnode)
         else:
             self.board[bname] = bnode.object = Board(self.hal, bnode)
+            self.board[bname].init()
+    # events handler
+    def _ready(self):
+        self.board_ready = self.board_ready + 1
+        if self.board_ready == self.hal.mcu_count:
+            #logging.debug("* Printer Controller connected to MCU(s).")
+            logging.debug(self.hal.show())
+        elif self.board_ready > self.hal.mcu_count:
+            raise error("Controller: too many ready MCUs.")
+    #
     def list_mcus(self):
         mcus = list()
         for b in self.board:

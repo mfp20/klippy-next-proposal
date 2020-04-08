@@ -180,8 +180,9 @@ class Main:
         try:
             # parse config
             self._read_config()
-            # ready to connect
+            # identify mcu and complete controller init
             self.send_event("klippy:mcu_identify")
+            # ready to connect
             for cb in self.event_handlers.get("klippy:connect", []):
                 if self.state_message is not msg("startup"):
                     return
