@@ -4,6 +4,7 @@
 # - https://reprap.org/wiki/G-code
 #
 # Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2018  Alec Plumb <alec@etherwalker.com>
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -17,6 +18,11 @@ class sentinel:
 
 class Object():
     object_command = ["UNKNOWN", "IGNORE", "ECHO"]
+    respond_types = {
+        'echo': 'echo:',
+        'command': '//',
+        'error' : '!!',
+    }
     extended_r = re.compile(
         r'^\s*(?:N[0-9]+\s*)?'
         r'(?P<cmd>[a-zA-Z_][a-zA-Z0-9_]+)(?:\s+|$)'
@@ -28,6 +34,8 @@ class Object():
         self.printer = self.hal.tree.printer.object
         self.reactor = self.hal.get_reactor()
         self.mutex = self.reactor.mutex()
+        self.default_prefix = self.node.attr_get_choice("default_type", respond_types, default="echo")
+        self.default_prefix = self.node.attr_get("default_prefix", default=self.default_prefix)
         # input handling
         self.input_log = collections.deque([], 50)
         # command handling
@@ -167,7 +175,7 @@ class Object():
 # main commander, commands receiver and dispatcher
 class Dispatch(Object):
     RETRY_TIME = 0.100
-    printer_command = ['RESTART', 'RESTART_FIRMWARE', 'SHOW_STATUS', 'HELP']
+    printer_command = ['RESTART', 'RESTART_FIRMWARE', 'SHOW_STATUS', 'HELP', 'RESPOND']
     args_r = re.compile('([A-Z_]+|[A-Z*/])')
     m112_r = re.compile('^(?:[nN][0-9]+)?\s*[mM]112(?:\s|$)')
     def __init__(self, hal, node):
@@ -413,12 +421,25 @@ class Dispatch(Object):
             if cmd in self.help:
                 cmdhelp.append("%-10s: %s" % (cmd, self.help[cmd]))
         self.respond_info("\n".join(cmdhelp), log=False)
+    cmd_RESPOND_help = "Send a message to the host"
+    def cmd_RESPOND(self, params):
+        respond_type = self.gcode.get_str('TYPE', params, None)
+        prefix = self.default_prefix
+        if(respond_type != None):
+            respond_type = respond_type.lower()
+            if(respond_type in respond_types):
+                prefix = respond_types[respond_type]
+            else:
+                raise self.gcode.error("RESPOND TYPE '%s' is invalid. Must be one of 'echo', 'command', or 'error'" % (respond_type,))
+        prefix = self.gcode.get_str('PREFIX', params, prefix)
+        msg = self.gcode.get_str('MSG', params, '')
+        self.gcode.respond("%s %s" %(prefix, msg))
 
 # gcode commander, to use in conjunction with toolheads
 class Gcode(Object):
     my_command = [
             'G1', 'G4', 'G28', 'G20', 'G90', 'G91', 'G92', 
-            'M82', 'M83', 'M114', 'M220', 'M221', 'M105', 'M112', 'M115', 'M400', 
+            'M82', 'M83', 'M114', 'M220', 'M221', 'M105', 'M112', 'M115', 'M118', 'M400', 
             'GCODE_SET_OFFSET', 'GCODE_SAVE_STATE', 'GCODE_RESTORE_STATE', 'GET_POSITION'
         ]
     def __init__(self, hal, node):
@@ -656,6 +677,21 @@ class Gcode(Object):
         software_version = self.printer.get_start_args().get('software_version')
         kw = {"FIRMWARE_NAME": "Klipper", "FIRMWARE_VERSION": software_version}
         self.ack(" ".join(["%s:%s" % (k, v) for k, v in kw.items()]))
+    cmd_M118_help = "Send a message to the host prefixed with '%s'" % (self.default_prefix,)
+    cmd_M118_ready_only = True
+    def cmd_M118(self, params):
+        if '#original' in params:
+            msg = params['#original']
+            if not msg.startswith('M118'):
+                # Parse out additional info if M118 recd during a print
+                start = msg.find('M118')
+                end = msg.rfind('*')
+                msg = msg[start:end]
+            if len(msg) > 5:
+                msg = msg[5:]
+            else:
+                msg = ''
+            self.gcode.respond("%s %s" %(self.default_prefix, msg))
     cmd_M220_help = "Set speed factor override percentage"
     def cmd_M220(self, params):
         value = self.get_float('S', params, 100., above=0.) / (60. * 100.)
@@ -762,3 +798,153 @@ class Gcode(Object):
 def load_node_object(hal, node):
     node.object = Gcode(hal, node)
     hal.get_commander().register_commander("gcode "+node.get_id(), node.object)
+
+# TODO
+# Adds support fro ARC commands via G2/G3
+# - Coordinates created by this are converted into G1 commands.
+# - Uses the plan_arc function from marlin which does steps in mm rather then in degrees.
+# - IJ version only
+#
+# Copyright (C) 2019  Aleksej Vasiljkovic <achmed21@gmail.com>
+#
+# function planArc() from https://github.com/MarlinFirmware/Marlin
+# Copyright (C) 2011 Camiel Gubbels / Erik van der Zalm
+class ArcSupport:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.mm_per_arc_segment = config.getfloat('resolution', 1, above=0.0)
+
+        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode.register_command("G2", self.cmd_G2, desc=self.cmd_G2_help)
+        self.gcode.register_command("G3", self.cmd_G2, desc=self.cmd_G3_help)
+
+    cmd_G2_help = "Counterclockwise rotation move"
+    cmd_G3_help = "Clockwise rotaion move"
+    def cmd_G2(self, params):
+        # set vars
+        currentPos =  self.gcode.get_status(None)['gcode_position']
+        #
+        asX = params.get("X", None)
+        asY = params.get("Y", None)
+        asZ = params.get("Z", None)
+        asR = float(params.get("R", 0.))    #radius
+        asI = float(params.get("I", 0.))
+        asJ = float(params.get("J", 0.))
+        asE = float(params.get("E", 0.))
+        asF = float(params.get("F", -1))
+
+        # health checks of code
+        if (asX is None or asY is None):
+            raise self.gcode.error("g2/g3: Coords missing")
+
+        elif asR == 0 and asI == 0 and asJ==0:
+            raise self.gcode.error("g2/g3: neither R nor I and J given")
+
+        elif asR > 0 and (asI !=0 or asJ!=0):
+            raise self.gcode.error("g2/g3: R, I and J were given. Invalid")
+        else:   # execute conversion
+            coords = []
+            clockwise = params['#command'].lower().startswith("g2")
+            asY = float(asY)
+            asX = float(asX)
+
+            # use radius
+            # if asR > 0:
+                # not sure if neccessary since R barely seems to be used
+
+            # use IJK
+            if asI != 0 or asJ!=0:
+                coords = self.planArc(currentPos,
+                            [asX,asY,0.,0.],
+                            [asI, asJ],
+                            clockwise)
+            # converting coords into G1 codes (lazy aproch)
+            if len(coords)>0:
+                # build dict and call cmd_G1
+                for coord in coords:
+                    g1_params = {'X': coord[0], 'Y': coord[1]}
+                    if asZ!=None:
+                        g1_params['Z']= float(asZ)
+                    if asE>0:
+                        g1_params['E']= float(asE)/len(coords)
+                    if asF>0:
+                        g1_params['F']= asF
+
+                    self.gcode.cmd_G1(g1_params)
+            else:
+                self.gcode.respond_info(
+                    "could not tranlate from '" + params['#original'] + "'")
+
+
+    # function planArc() originates from marlin plan_arc()
+    # https://github.com/MarlinFirmware/Marlin
+    #
+    # The arc is approximated by generating many small linear segments.
+    # The length of each segment is configured in MM_PER_ARC_SEGMENT
+    # Arcs smaller then this value, will be a Line only
+    def planArc(self, currentPos, targetPos=[0.,0.,0.,0.], offset=[0.,0.], clockwise=False):
+        # todo: sometimes produces full circles
+        coords = []
+        MM_PER_ARC_SEGMENT = self.mm_per_arc_segment
+        #
+        X_AXIS = 0
+        Y_AXIS = 1
+        Z_AXIS = 2
+        # Radius vector from center to current location
+        r_P = offset[0]*-1
+        r_Q = offset[1]*-1
+        #
+        radius = math.hypot(r_P, r_Q)
+        center_P = currentPos[X_AXIS] - r_P
+        center_Q = currentPos[Y_AXIS] - r_Q
+        rt_X = targetPos[X_AXIS] - center_P
+        rt_Y = targetPos[Y_AXIS] - center_Q
+        linear_travel = targetPos[Z_AXIS] - currentPos[Z_AXIS]
+        #
+        angular_travel = math.atan2(r_P * rt_Y - r_Q * rt_X,
+            r_P * rt_X + r_Q * rt_Y)
+        if (angular_travel < 0): angular_travel+= math.radians(360)
+        if (clockwise): angular_travel-= math.radians(360)
+        # Make a circle if the angular rotation is 0
+        # and the target is current position
+        if (angular_travel == 0
+            and currentPos[X_AXIS] == targetPos[X_AXIS]
+            and currentPos[Y_AXIS] == targetPos[Y_AXIS]):
+            angular_travel = math.radians(360)
+        #
+        flat_mm = radius * angular_travel
+        mm_of_travel = linear_travel
+        if(mm_of_travel == linear_travel):
+            mm_of_travel = math.hypot(flat_mm, linear_travel)
+        else:
+            mm_of_travel = math.abs(flat_mm)
+        #
+        if (mm_of_travel < 0.001):
+            return coords
+        #
+        segments = int(math.floor(mm_of_travel / (MM_PER_ARC_SEGMENT)))
+        if(segments<1):
+            segments=1
+        #
+        raw = [0.,0.,0.,0.]
+        theta_per_segment = float(angular_travel / segments)
+        linear_per_segment = float(linear_travel / segments)
+
+        # Initialize the linear axis
+        raw[Z_AXIS] = currentPos[Z_AXIS];
+        #
+        for i in range(1,segments+1):
+            cos_Ti = math.cos(i * theta_per_segment)
+            sin_Ti = math.sin(i * theta_per_segment)
+            r_P = -offset[0] * cos_Ti + offset[1] * sin_Ti
+            r_Q = -offset[0] * sin_Ti - offset[1] * cos_Ti
+
+            raw[X_AXIS] = center_P + r_P
+            raw[Y_AXIS] = center_Q + r_Q
+            raw[Z_AXIS] += linear_per_segment
+
+            coords.append([raw[X_AXIS],  raw[Y_AXIS], raw[Z_AXIS] ])
+        return coords
+
+def load_config(config):
+    return ArcSupport(config)

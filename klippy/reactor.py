@@ -151,6 +151,12 @@ class Select:
     def register_callback(self, callback, waketime=NOW):
         rcb = ReactorCallback(self, callback, waketime)
         return rcb.completion
+    # Return a completion that completes when all completions in a list complete
+    def completion_multi(completions):
+        if len(completions) == 1:
+            return completions[0]
+        cb = (lambda e: all([c.wait() for c in completions]))
+        return self.register_callback(cb)
     # Asynchronous (from another thread) callbacks and completions
     def register_async_callback(self, callback, waketime=NOW):
         self._async_queue.put_nowait(
