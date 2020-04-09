@@ -238,6 +238,23 @@ class Pins:
         return self.get_vector(self.name.index(name))
     def vector_byalias(self, alias):
         return self.get_vector(self.alias.index(alias))
+    def adc_register(self, name, adc):
+        # TODO check
+        if self.isname(name):
+            self.function[self.name2index(name)] = adc
+        elif self.isalias(name):
+            self.function[self.alias2index(name)] = adc
+        else:
+            error("ADC pin name '%s' not found.", name)
+    def adc_query(self, name):
+        # TODO check
+        if self.isname(name):
+            value, timestamp = self.name2function(name).get_last_value()        
+        elif self.isalias(name):
+            value, timestamp = self.alias2function(name).get_last_value()        
+        else:
+            error("ADC pin name '%s' not found.", name)
+        return (name, value, timestamp)
 
 ######################################################################
 # MCU
@@ -1100,6 +1117,9 @@ class Object(composite.Object):
         self.hal.get_printer().register_event_handler("controller:ready", self._ready)
         self.hal.get_commander().register_command('SHOW_PINS_ALL', self.cmd_SHOW_PINS_ALL, desc=self.cmd_SHOW_PINS_ALL_help)
         self.hal.get_commander().register_command('SHOW_PINS_ACTIVE', self.cmd_SHOW_PINS_ACTIVE, desc=self.cmd_SHOW_PINS_ACTIVE_help)
+        self.hal.get_commander().register_command("SHOW_ADC_VALUE", self.cmd_SHOW_ADC_VALUE, desc=self.cmd_SHOW_ADC_VALUE_help)
+        self.hal.get_commander().register_command("SHOW_ENDSTOPS", self.cmd_SHOW_ENDSTOPS, desc=self.cmd_SHOW_ENDSTOPS_help)
+        #gcode.register_command("M119", self.cmd_SHOW_ENDSTOPS)
     def register_board(self, bnode, dummy = False):
         bname = bnode.get_id()
         if bname in self.board:
@@ -1147,6 +1167,34 @@ class Object(composite.Object):
     cmd_SHOW_PINS_ACTIVE_help = "Shows active pins."
     def cmd_SHOW_PINS_ACTIVE(self):
         self.hal.get_gcode().respond_info(self.pin_matrix_active(), log=False)
+    cmd_SHOW_ADC_VALUE_help = "Report the last value of an analog pin"
+    def cmd_SHOW_ADC_VALUE(self, params):
+        # TODO
+        gcode = self.printer.lookup_object('gcode')
+        name = gcode.get_str('NAME', params, None)
+        mcu = ""
+        value = mcu.adc_query(name)
+        if not value:
+            objs = ['"%s"' % (n,) for n in sorted(self.adc.keys())]
+            msg = "Available ADC objects: %s" % (', '.join(objs),)
+            gcode.respond_info(msg)
+            return
+        msg = 'ADC object "%s" has value %.6f (timestamp %.3f)' % value
+        pullup = gcode.get_float('PULLUP', params, None, above=0.)
+        if pullup is not None:
+            v = max(.00001, min(.99999, value))
+            r = pullup * v / (1.0 - v)
+            msg += "\n resistance %.3f (with %.0f pullup)" % (r, pullup)
+        gcode.respond_info(msg)
+    cmd_SHOW_ENDSTOPS_help = "Report on the status of each endstop"
+    def cmd_SHOW_ENDSTOPS(self, params):
+        # TODO
+        msg = " "
+        for rail in self.hal.children_deep("rail "):
+            msg = msg + ["%s:%s\n" % (name, ["open", "TRIGGERED"][not not t]) for name, t in rail.get_endstops_status()]
+        #
+        self.hal.get_gcode().respond(msg)
+
 
 def load_node_object(hal, node):
     if node.name == "controller":

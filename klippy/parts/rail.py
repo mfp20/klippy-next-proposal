@@ -112,6 +112,11 @@ class Object(composite.Object):
         return list(self.steppers)
     def get_endstops(self):
         return list(self.endstops)
+    def get_endstops_status(self):
+        # TODO
+        print_time = self.printer.lookup_object('toolhead').get_last_move_time()
+        last_state = [(name, mcu_endstop.query_endstop(print_time)) for mcu_endstop, name in self.endstops]
+        return {'last_query': {name: value for name, value in last_state}}
     def setup_itersolve(self, alloc_func, *params):
         for stepper in self.steppers:
             stepper.setup_itersolve(alloc_func, *params)
