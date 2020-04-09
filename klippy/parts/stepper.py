@@ -330,3 +330,260 @@ class ForceMove:
         toolhead.set_position([x, y, z, curpos[3]], homing_axes=(0, 1, 2))
         self.gcode.reset_last_position()
 
+# Support for enable pins on stepper motor drivers
+#
+# Copyright (C) 2019  Kevin O'Connor <kevin@koconnor.net>
+#
+# This file may be distributed under the terms of the GNU GPLv3 license.
+import logging
+
+DISABLE_STALL_TIME = 0.100
+
+# Tracking of shared stepper enable pins
+class StepperEnablePin:
+    def __init__(self, mcu_enable, enable_count):
+        self.mcu_enable = mcu_enable
+        self.enable_count = enable_count
+        self.is_dedicated = True
+    def set_enable(self, print_time):
+        if not self.enable_count:
+            self.mcu_enable.set_digital(print_time, 1)
+        self.enable_count += 1
+    def set_disable(self, print_time):
+        self.enable_count -= 1
+        if not self.enable_count:
+            self.mcu_enable.set_digital(print_time, 0)
+
+# Enable line tracking for each stepper motor
+class EnableTracking:
+    def __init__(self, printer, stepper, pin):
+        self.stepper = stepper
+        self.callbacks = []
+        self.is_enabled = False
+        self.stepper.add_active_callback(self.motor_enable)
+        if pin is None:
+            # No enable line (stepper always enabled)
+            self.enable = StepperEnablePin(None, 9999)
+            self.enable.is_dedicated = False
+            return
+        ppins = printer.lookup_object('pins')
+        pin_params = ppins.lookup_pin(pin, can_invert=True,
+                                      share_type='stepper_enable')
+        self.enable = pin_params.get('class')
+        if self.enable is not None:
+            # Shared enable line
+            self.enable.is_dedicated = False
+            return
+        mcu_enable = pin_params['chip'].setup_pin('digital_out', pin_params)
+        mcu_enable.setup_max_duration(0.)
+        self.enable = pin_params['class'] = StepperEnablePin(mcu_enable, 0)
+    def register_state_callback(self, callback):
+        self.callbacks.append(callback)
+    def motor_enable(self, print_time):
+        if not self.is_enabled:
+            for cb in self.callbacks:
+                cb(print_time, True)
+            self.enable.set_enable(print_time)
+            self.is_enabled = True
+    def motor_disable(self, print_time):
+        if self.is_enabled:
+            # Enable stepper on future stepper movement
+            for cb in self.callbacks:
+                cb(print_time, False)
+            self.enable.set_disable(print_time)
+            self.is_enabled = False
+            self.stepper.add_active_callback(self.motor_enable)
+    def is_motor_enabled(self):
+        return self.is_enabled
+    def has_dedicated_enable(self):
+        return self.enable.is_dedicated
+
+# Global stepper enable line tracking
+class PrinterStepperEnable:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.enable_lines = {}
+        self.printer.register_event_handler("gcode:request_restart", self._handle_request_restart)
+        # Register M18/M84 commands
+        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode.register_command("M18", self.cmd_M18)
+        self.gcode.register_command("M84", self.cmd_M18)
+        self.gcode.register_command("SET_STEPPER_ENABLE", self.cmd_SET_STEPPER_ENABLE, desc = self.cmd_SET_STEPPER_ENABLE_help)
+    def register_stepper(self, stepper, pin):
+        name = stepper.get_name()
+        self.enable_lines[name] = EnableTracking(self.printer, stepper, pin)
+    def motor_off(self):
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.dwell(DISABLE_STALL_TIME)
+        print_time = toolhead.get_last_move_time()
+        for el in self.enable_lines.values():
+            el.motor_disable(print_time)
+        self.printer.send_event("stepper_enable:motor_off", print_time)
+        toolhead.dwell(DISABLE_STALL_TIME)
+        logging.debug('; Max time of %f', print_time)
+    def motor_debug_enable(self, stepper=None, enable=1):
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.dwell(DISABLE_STALL_TIME)
+        print_time = toolhead.get_last_move_time()
+        if stepper in self.enable_lines:
+            el = self.enable_lines.get(stepper, "")
+            if enable:
+                el.motor_enable(print_time)
+                logging.info("%s has been manually enabled", stepper)
+            else:
+                el.motor_disable(print_time)
+                logging.info("%s has been manually disabled", stepper)
+        else:
+            self.gcode.respond_info('SET_STEPPER_ENABLE: Invalid stepper "%s"'
+                                % (stepper))
+        toolhead.dwell(DISABLE_STALL_TIME)
+        logging.debug('; Max time of %f', print_time)
+    def _handle_request_restart(self, print_time):
+        self.motor_off()
+    def cmd_M18(self, params):
+        # Turn off motors
+        self.motor_off()
+    cmd_SET_STEPPER_ENABLE_help = "Enable/disable individual stepper by name"
+    def cmd_SET_STEPPER_ENABLE(self, params):
+        stepper_name = self.gcode.get_str('STEPPER', params, None)
+        stepper_enable = self.gcode.get_int('ENABLE', params, 1)
+        self.motor_debug_enable(stepper_name, stepper_enable)
+    def lookup_enable(self, name):
+        if name not in self.enable_lines:
+            raise self.printer.config_error("Unknown stepper '%s'" % (name,))
+        return self.enable_lines[name]
+
+def load_config(config):
+    return PrinterStepperEnable(config)
+# Support for a manual controlled stepper
+#
+# Copyright (C) 2019  Kevin O'Connor <kevin@koconnor.net>
+#
+# This file may be distributed under the terms of the GNU GPLv3 license.
+import stepper, homing, force_move, chelper
+
+ENDSTOP_SAMPLE_TIME = .000015
+ENDSTOP_SAMPLE_COUNT = 4
+
+class ManualStepper:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        if config.get('endstop_pin', None) is not None:
+            self.can_home = True
+            self.rail = stepper.PrinterRail(
+                config, need_position_minmax=False, default_position_endstop=0.)
+            self.steppers = self.rail.get_steppers()
+        else:
+            self.can_home = False
+            self.rail = stepper.PrinterStepper(config)
+            self.steppers = [self.rail]
+        self.velocity = config.getfloat('velocity', 5., above=0.)
+        self.accel = config.getfloat('accel', 0., minval=0.)
+        self.next_cmd_time = 0.
+        # Setup iterative solver
+        ffi_main, ffi_lib = chelper.get_ffi()
+        self.trapq = ffi_main.gc(ffi_lib.trapq_alloc(), ffi_lib.trapq_free)
+        self.trapq_append = ffi_lib.trapq_append
+        self.trapq_free_moves = ffi_lib.trapq_free_moves
+        self.rail.setup_itersolve('cartesian_stepper_alloc', 'x')
+        self.rail.set_trapq(self.trapq)
+        self.rail.set_max_jerk(9999999.9, 9999999.9)
+        # Register commands
+        stepper_name = config.get_name().split()[1]
+        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode.register_mux_command('MANUAL_STEPPER', "STEPPER", stepper_name, self.cmd_MANUAL_STEPPER, desc=self.cmd_MANUAL_STEPPER_help)
+    def sync_print_time(self):
+        toolhead = self.printer.lookup_object('toolhead')
+        print_time = toolhead.get_last_move_time()
+        if self.next_cmd_time > print_time:
+            toolhead.dwell(self.next_cmd_time - print_time)
+        else:
+            self.next_cmd_time = print_time
+    def do_enable(self, enable):
+        self.sync_print_time()
+        stepper_enable = self.printer.lookup_object('stepper_enable')
+        if enable:
+            for s in self.steppers:
+                se = stepper_enable.lookup_enable(s.get_name())
+                se.motor_enable(self.next_cmd_time)
+        else:
+            for s in self.steppers:
+                se = stepper_enable.lookup_enable(s.get_name())
+                se.motor_disable(self.next_cmd_time)
+        self.sync_print_time()
+    def do_set_position(self, setpos):
+        self.rail.set_position([setpos, 0., 0.])
+    def do_move(self, movepos, speed, accel, sync=True):
+        self.sync_print_time()
+        cp = self.rail.get_commanded_position()
+        dist = movepos - cp
+        axis_r, accel_t, cruise_t, cruise_v = force_move.calc_move_time(
+            dist, speed, accel)
+        self.trapq_append(self.trapq, self.next_cmd_time,
+                          accel_t, cruise_t, accel_t,
+                          cp, 0., 0., axis_r, 0., 0.,
+                          0., cruise_v, accel)
+        self.next_cmd_time = self.next_cmd_time + accel_t + cruise_t + accel_t
+        self.rail.generate_steps(self.next_cmd_time)
+        self.trapq_free_moves(self.trapq, self.next_cmd_time + 99999.9)
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.note_kinematic_activity(self.next_cmd_time)
+        if sync:
+            self.sync_print_time()
+    def do_homing_move(self, movepos, speed, accel, triggered, check_trigger):
+        if not self.can_home:
+            raise self.gcode.error("No endstop for this manual stepper")
+        # Notify start of homing/probing move
+        endstops = self.rail.get_endstops()
+        self.printer.send_event("homing:homing_move_begin",
+                                [es for es, name in endstops])
+        # Start endstop checking
+        self.sync_print_time()
+        endstops = self.rail.get_endstops()
+        for mcu_endstop, name in endstops:
+            min_step_dist = min([s.get_step_dist()
+                                 for s in mcu_endstop.get_steppers()])
+            mcu_endstop.home_start(
+                self.next_cmd_time, ENDSTOP_SAMPLE_TIME, ENDSTOP_SAMPLE_COUNT,
+                min_step_dist / speed, triggered=triggered)
+        # Issue move
+        self.do_move(movepos, speed, accel)
+        # Wait for endstops to trigger
+        error = None
+        for mcu_endstop, name in endstops:
+            did_trigger = mcu_endstop.home_wait(self.next_cmd_time)
+            if not did_trigger and check_trigger and error is None:
+                error = "Failed to home %s: Timeout during homing" % (name,)
+        # Signal homing/probing move complete
+        try:
+            self.printer.send_event("homing:homing_move_end",
+                                    [es for es, name in endstops])
+        except CommandError as e:
+            if error is None:
+                error = str(e)
+        self.sync_print_time()
+        if error is not None:
+            raise homing.CommandError(error)
+    cmd_MANUAL_STEPPER_help = "Command a manually configured stepper"
+    def cmd_MANUAL_STEPPER(self, params):
+        if 'ENABLE' in params:
+            self.do_enable(self.gcode.get_int('ENABLE', params))
+        if 'SET_POSITION' in params:
+            setpos = self.gcode.get_float('SET_POSITION', params)
+            self.do_set_position(setpos)
+        sync = self.gcode.get_int('SYNC', params, 1)
+        homing_move = self.gcode.get_int('STOP_ON_ENDSTOP', params, 0)
+        speed = self.gcode.get_float('SPEED', params, self.velocity, above=0.)
+        accel = self.gcode.get_float('ACCEL', params, self.accel, minval=0.)
+        if homing_move:
+            movepos = self.gcode.get_float('MOVE', params)
+            self.do_homing_move(movepos, speed, accel,
+                                homing_move > 0, abs(homing_move) == 1)
+        elif 'MOVE' in params:
+            movepos = self.gcode.get_float('MOVE', params)
+            self.do_move(movepos, speed, accel, sync)
+        elif 'SYNC' in params and sync:
+            self.sync_print_time()
+
+def load_config_prefix(config):
+    return ManualStepper(config)
