@@ -4,6 +4,7 @@
 # - Multiple boards Controller
 #
 # Copyright (C) 2016-2020  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2019  Florian Heilmann <Florian.Heilmann@gmx.net>
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -256,11 +257,144 @@ class Pins:
             error("ADC pin name '%s' not found.", name)
         return (name, value, timestamp)
 
+#
+# Virtual pin that propagates its changes to multiple output pins
+#
+class MultiPin:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        ppins = self.printer.lookup_object('pins')
+        try:
+            ppins.register_chip('multi_pin', self)
+        except ppins.error:
+            pass
+        self.pin_type = None
+        self.pin_list = [pin.strip() for pin in config.get('pins').split(',')]
+        self.mcu_pins = []
+    def setup_pin(self, pin_type, pin_params):
+        ppins = self.printer.lookup_object('pins')
+        pin_name = pin_params['pin']
+        pin = self.printer.lookup_object('multi_pin ' + pin_name, None)
+        if pin is not self:
+            if pin is None:
+                raise ppins.error("multi_pin %s not configured" % (pin_name,))
+            return pin.setup_pin(pin_type, pin_params)
+        if self.pin_type is not None:
+            raise ppins.error("Can't setup multi_pin %s twice" % (pin_name,))
+        self.pin_type = pin_type
+        invert = ""
+        if pin_params['invert']:
+            invert = "!"
+        self.mcu_pins = [ppins.setup_pin(pin_type, invert + pin_desc)
+                         for pin_desc in self.pin_list]
+        return self
+    def get_mcu(self):
+        return self.mcu_pins[0].get_mcu()
+    def setup_max_duration(self, max_duration):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_max_duration(max_duration)
+    def setup_start_value(self, start_value, shutdown_value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_start_value(start_value, shutdown_value)
+    def setup_cycle_time(self, cycle_time, hardware_pwm=False):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
+    def set_digital(self, print_time, value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.set_digital(print_time, value)
+    def set_pwm(self, print_time, value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.set_pwm(print_time, value)
+
+#
+# Support for custom board pin aliases
+#
+class CustomAliases:
+    def __init__(self, config, chip_name):
+        ppins = config.get_printer().lookup_object('pins')
+        pin_resolver = ppins.get_pin_resolver(chip_name)
+        aliases = config.get("aliases").strip()
+        if aliases.endswith(','):
+            aliases = aliases[:-1]
+        parts = [a.split('=', 1) for a in aliases.split(',')]
+        for pair in parts:
+            if len(pair) != 2:
+                raise ppins.error("Unable to parse aliases in %s"
+                                  % (config.get_name(),))
+            name, value = [s.strip() for s in pair]
+            if value.startswith('<') and value.endswith('>'):
+                pin_resolver.reserve_pin(name, value)
+            else:
+                pin_resolver.alias_pin(name, value)
+
 ######################################################################
 # MCU
 ######################################################################
 
-class MCU_digital_out:
+#
+# Code to configure miscellaneous chips
+#
+PIN_MIN_TIME = 0.100
+class MCU_pin_out:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        ppins = self.printer.lookup_object('pins')
+        self.is_pwm = config.getboolean('pwm', False)
+        if self.is_pwm:
+            self.mcu_pin = ppins.setup_pin('pwm', config.get('pin'))
+            cycle_time = config.getfloat('cycle_time', 0.100, above=0.)
+            hardware_pwm = config.getboolean('hardware_pwm', False)
+            self.mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
+            self.scale = config.getfloat('scale', 1., above=0.)
+        else:
+            self.mcu_pin = ppins.setup_pin('digital_out', config.get('pin'))
+            self.scale = 1.
+        self.mcu_pin.setup_max_duration(0.)
+        self.last_value_time = 0.
+        static_value = config.getfloat('static_value', None, minval=0., maxval=self.scale)
+        if static_value is not None:
+            self.last_value = static_value / self.scale
+            self.mcu_pin.setup_start_value(self.last_value, self.last_value, True)
+        else:
+            self.last_value = config.getfloat('value', 0., minval=0., maxval=self.scale) / self.scale
+            shutdown_value = config.getfloat('shutdown_value', 0., minval=0., maxval=self.scale) / self.scale
+            self.mcu_pin.setup_start_value(self.last_value, shutdown_value)
+            pin_name = config.get_name().split()[1]
+            self.gcode = self.printer.lookup_object('gcode')
+            self.gcode.register_mux_command("SET_PIN", "PIN", pin_name, self.cmd_SET_PIN, desc=self.cmd_SET_PIN_help)
+    def get_status(self, eventtime):
+        return {'value': self.last_value}
+    cmd_SET_PIN_help = "Set the value of an output pin"
+    def cmd_SET_PIN(self, params):
+        value = self.gcode.get_float('VALUE', params, minval=0., maxval=self.scale)
+        value /= self.scale
+        if value == self.last_value:
+            return
+        print_time = self.printer.lookup_object('toolhead').get_last_move_time()
+        print_time = max(print_time, self.last_value_time + PIN_MIN_TIME)
+        if self.is_pwm:
+            self.mcu_pin.set_pwm(print_time, value)
+        else:
+            if value not in [0., 1.]:
+                raise self.gcode.error("Invalid pin value")
+            self.mcu_pin.set_digital(print_time, value)
+        self.last_value = value
+        self.last_value_time = print_time
+
+#
+# Set the state of a list of digital output pins
+#
+class MCU_pin_out_multi:
+    def __init__(self, config):
+        printer = config.get_printer()
+        ppins = printer.lookup_object('pins')
+        pin_list = [pin.strip() for pin in config.get('pins').split(',')]
+        for pin_desc in pin_list:
+            mcu_pin = ppins.setup_pin('digital_out', pin_desc)
+            mcu_pin.setup_start_value(1, 1, True)
+
+#
+class MCU_pin_out_digital:
     def __init__(self, mcu, pin_params):
         self._mcu = mcu
         self._oid = None
@@ -299,7 +433,7 @@ class MCU_digital_out:
 
 # Bus synchronized digital outputs
 #   Helper code for a gpio that updates on a cmd_queue
-class MCU_digital_out_queued:
+class MCU_pin_out_digital_queued:
     def __init__(self, mcu, pin_desc, cmd_queue=None, value=0):
         self.mcu = mcu
         self.oid = mcu.create_oid()
@@ -328,7 +462,7 @@ class MCU_digital_out_queued:
             return
         self.update_pin_cmd.send([self.oid, not not value], minclock=minclock, reqclock=reqclock)
 
-class MCU_pwm:
+class MCU_pin_out_pwm:
     def __init__(self, mcu, pin_params):
         self._mcu = mcu
         self._hardware_pwm = False
@@ -392,7 +526,7 @@ class MCU_pwm:
         self._set_cmd.send([self._oid, clock, value], minclock=self._last_clock, reqclock=clock)
         self._last_clock = clock
 
-class MCU_adc:
+class MCU_pin_in_adc:
     def __init__(self, mcu, pin_params):
         self._mcu = mcu
         self._pin = pin_params['pin']
@@ -440,6 +574,30 @@ class MCU_adc:
         self._last_state = (last_value, last_read_time)
         if self._callback is not None:
             self._callback(last_read_time, last_value)
+
+# SAMD based boards have six internal serial modules that can be configured individually.
+# Some are available for mapping onto specific pins. 
+# These interfaces are hardware based and can be I2Cs, UARTs or SPIs types.
+class MCU_samd_sercom:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.name = config.get_name().split()[1]
+        self.tx_pin = config.get("tx_pin")
+        self.rx_pin = config.get("rx_pin", None)
+        self.clk_pin = config.get("clk_pin")
+        ppins = self.printer.lookup_object("pins")
+        tx_pin_params = ppins.lookup_pin(self.tx_pin)
+        self.mcu = tx_pin_params['chip']
+        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=tx pin=%s" % (self.name, tx_pin_params['pin']))
+        clk_pin_params = ppins.lookup_pin(self.clk_pin)
+        if self.mcu is not clk_pin_params['chip']:
+           raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
+        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=clk pin=%s" % (self.name, clk_pin_params['pin']))
+        if self.rx_pin:
+            rx_pin_params = ppins.lookup_pin(self.rx_pin)
+            if self.mcu is not rx_pin_params['chip']:
+                raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
+            self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=rx pin=%s" % (self.name, rx_pin_params['pin']))
 
 # Helper code for working with devices connected to an MCU via an I2C bus
 class MCU_i2c:
@@ -822,7 +980,7 @@ class MCU:
         self.hal.get_printer().send_event("board:"+self._name+":identified", self._name)
     # Config creation helpers
     def setup_pin(self, pin_type, pin_params):
-        pcs = {'endstop': MCU_endstop, 'digital_out': MCU_digital_out, 'pwm': MCU_pwm, 'adc': MCU_adc}
+        pcs = {'endstop': MCU_endstop, 'digital_out': MCU_pin_out_digital, 'pwm': MCU_pin_out_pwm, 'adc': MCU_pin_in_adc}
         if pin_type not in pcs:
             raise pins.error("pin type %s not supported on mcu" % (pin_type,))
         return pcs[pin_type](self, pin_params)
@@ -1205,207 +1363,3 @@ def load_node_object(hal, node):
         else:
             hal.get_controller().register_board(node, True)
 
-# Code to configure miscellaneous chips
-#
-# Copyright (C) 2017,2018  Kevin O'Connor <kevin@koconnor.net>
-#
-# This file may be distributed under the terms of the GNU GPLv3 license.
-
-PIN_MIN_TIME = 0.100
-
-class PrinterOutputPin:
-    def __init__(self, config):
-        self.printer = config.get_printer()
-        ppins = self.printer.lookup_object('pins')
-        self.is_pwm = config.getboolean('pwm', False)
-        if self.is_pwm:
-            self.mcu_pin = ppins.setup_pin('pwm', config.get('pin'))
-            cycle_time = config.getfloat('cycle_time', 0.100, above=0.)
-            hardware_pwm = config.getboolean('hardware_pwm', False)
-            self.mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
-            self.scale = config.getfloat('scale', 1., above=0.)
-        else:
-            self.mcu_pin = ppins.setup_pin('digital_out', config.get('pin'))
-            self.scale = 1.
-        self.mcu_pin.setup_max_duration(0.)
-        self.last_value_time = 0.
-        static_value = config.getfloat('static_value', None,
-                                       minval=0., maxval=self.scale)
-        if static_value is not None:
-            self.last_value = static_value / self.scale
-            self.mcu_pin.setup_start_value(
-                self.last_value, self.last_value, True)
-        else:
-            self.last_value = config.getfloat(
-                'value', 0., minval=0., maxval=self.scale) / self.scale
-            shutdown_value = config.getfloat(
-                'shutdown_value', 0., minval=0., maxval=self.scale) / self.scale
-            self.mcu_pin.setup_start_value(self.last_value, shutdown_value)
-            pin_name = config.get_name().split()[1]
-            self.gcode = self.printer.lookup_object('gcode')
-            self.gcode.register_mux_command("SET_PIN", "PIN", pin_name,
-                                            self.cmd_SET_PIN,
-                                            desc=self.cmd_SET_PIN_help)
-    def get_status(self, eventtime):
-        return {'value': self.last_value}
-    cmd_SET_PIN_help = "Set the value of an output pin"
-    def cmd_SET_PIN(self, params):
-        value = self.gcode.get_float('VALUE', params,
-                                     minval=0., maxval=self.scale)
-        value /= self.scale
-        if value == self.last_value:
-            return
-        print_time = self.printer.lookup_object('toolhead').get_last_move_time()
-        print_time = max(print_time, self.last_value_time + PIN_MIN_TIME)
-        if self.is_pwm:
-            self.mcu_pin.set_pwm(print_time, value)
-        else:
-            if value not in [0., 1.]:
-                raise self.gcode.error("Invalid pin value")
-            self.mcu_pin.set_digital(print_time, value)
-        self.last_value = value
-        self.last_value_time = print_time
-
-def load_config_prefix(config):
-    return PrinterOutputPin(config)
-# Set the state of a list of digital output pins
-#
-# Copyright (C) 2017-2018  Kevin O'Connor <kevin@koconnor.net>
-#
-# This file may be distributed under the terms of the GNU GPLv3 license.
-
-class PrinterStaticDigitalOut:
-    def __init__(self, config):
-        printer = config.get_printer()
-        ppins = printer.lookup_object('pins')
-        pin_list = [pin.strip() for pin in config.get('pins').split(',')]
-        for pin_desc in pin_list:
-            mcu_pin = ppins.setup_pin('digital_out', pin_desc)
-            mcu_pin.setup_start_value(1, 1, True)
-
-def load_config_prefix(config):
-    return PrinterStaticDigitalOut(config)
-# Virtual pin that propagates its changes to multiple output pins
-#
-# Copyright (C) 2017,2018  Kevin O'Connor <kevin@koconnor.net>
-#
-# This file may be distributed under the terms of the GNU GPLv3 license.
-
-class PrinterMultiPin:
-    def __init__(self, config):
-        self.printer = config.get_printer()
-        ppins = self.printer.lookup_object('pins')
-        try:
-            ppins.register_chip('multi_pin', self)
-        except ppins.error:
-            pass
-        self.pin_type = None
-        self.pin_list = [pin.strip() for pin in config.get('pins').split(',')]
-        self.mcu_pins = []
-    def setup_pin(self, pin_type, pin_params):
-        ppins = self.printer.lookup_object('pins')
-        pin_name = pin_params['pin']
-        pin = self.printer.lookup_object('multi_pin ' + pin_name, None)
-        if pin is not self:
-            if pin is None:
-                raise ppins.error("multi_pin %s not configured" % (pin_name,))
-            return pin.setup_pin(pin_type, pin_params)
-        if self.pin_type is not None:
-            raise ppins.error("Can't setup multi_pin %s twice" % (pin_name,))
-        self.pin_type = pin_type
-        invert = ""
-        if pin_params['invert']:
-            invert = "!"
-        self.mcu_pins = [ppins.setup_pin(pin_type, invert + pin_desc)
-                         for pin_desc in self.pin_list]
-        return self
-    def get_mcu(self):
-        return self.mcu_pins[0].get_mcu()
-    def setup_max_duration(self, max_duration):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_max_duration(max_duration)
-    def setup_start_value(self, start_value, shutdown_value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_start_value(start_value, shutdown_value)
-    def setup_cycle_time(self, cycle_time, hardware_pwm=False):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
-    def set_digital(self, print_time, value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.set_digital(print_time, value)
-    def set_pwm(self, print_time, value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.set_pwm(print_time, value)
-
-def load_config_prefix(config):
-    return PrinterMultiPin(config)
-# SAMD Sercom configuration
-#
-# Copyright (C) 2019  Florian Heilmann <Florian.Heilmann@gmx.net>
-#
-# This file may be distributed under the terms of the GNU GPLv3 license.
-
-class SamdSERCOM:
-    def __init__(self, config):
-        self.printer = config.get_printer()
-        self.name = config.get_name().split()[1]
-
-        self.tx_pin = config.get("tx_pin")
-        self.rx_pin = config.get("rx_pin", None)
-        self.clk_pin = config.get("clk_pin")
-
-        ppins = self.printer.lookup_object("pins")
-        tx_pin_params = ppins.lookup_pin(self.tx_pin)
-        self.mcu = tx_pin_params['chip']
-        self.mcu.add_config_cmd(
-            "set_sercom_pin bus=%s sercom_pin_type=tx pin=%s" % (
-                self.name, tx_pin_params['pin']))
-
-        clk_pin_params = ppins.lookup_pin(self.clk_pin)
-        if self.mcu is not clk_pin_params['chip']:
-           raise ppins.error("%s: SERCOM pins must be on same mcu" % (
-                    config.get_name(),))
-        self.mcu.add_config_cmd(
-            "set_sercom_pin bus=%s sercom_pin_type=clk pin=%s" % (
-                self.name, clk_pin_params['pin']))
-
-        if self.rx_pin:
-            rx_pin_params = ppins.lookup_pin(self.rx_pin)
-            if self.mcu is not rx_pin_params['chip']:
-                raise ppins.error("%s: SERCOM pins must be on same mcu" % (
-                    config.get_name(),))
-            self.mcu.add_config_cmd(
-                "set_sercom_pin bus=%s sercom_pin_type=rx pin=%s" % (
-                    self.name, rx_pin_params['pin']))
-
-def load_config_prefix(config):
-    return SamdSERCOM(config)
-# Support for custom board pin aliases
-#
-# Copyright (C) 2019  Kevin O'Connor <kevin@koconnor.net>
-#
-# This file may be distributed under the terms of the GNU GPLv3 license.
-
-class PrinterBoardAliases:
-    def __init__(self, config, chip_name):
-        ppins = config.get_printer().lookup_object('pins')
-        pin_resolver = ppins.get_pin_resolver(chip_name)
-        aliases = config.get("aliases").strip()
-        if aliases.endswith(','):
-            aliases = aliases[:-1]
-        parts = [a.split('=', 1) for a in aliases.split(',')]
-        for pair in parts:
-            if len(pair) != 2:
-                raise ppins.error("Unable to parse aliases in %s"
-                                  % (config.get_name(),))
-            name, value = [s.strip() for s in pair]
-            if value.startswith('<') and value.endswith('>'):
-                pin_resolver.reserve_pin(name, value)
-            else:
-                pin_resolver.alias_pin(name, value)
-
-def load_config(config):
-    return PrinterBoardAliases(config, "mcu")
-
-def load_config_prefix(config):
-    return PrinterBoardAliases(config, config.get_name().split()[1])

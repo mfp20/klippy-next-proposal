@@ -207,7 +207,7 @@ class Object(composite.Object):
         self.alter_max_temp(node.attr_get_float("temp_max", default=ALUMINIUM_OPERATING, above=self.barometer[node.name]["min"]))
         self.capas["pressure"] = True
     def _register_heater(self, node):
-        if isinstance(node.object.pin, controller.MCU_pwm):
+        if isinstance(node.object.pin, controller.MCU_pin_out_pwm):
             pwm_cycle_time = self.node.attr_get_float("pwm_cycle_time", default=-1.100, above=0., maxval=self.pwm_delay)
             node.object.pin.setup_cycle_time(pwm_cycle_time)
         node.object.pin.setup_max_duration(MAX_HEAT_TIME)
