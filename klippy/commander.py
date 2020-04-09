@@ -34,7 +34,7 @@ class Object():
         self.printer = self.hal.tree.printer.object
         self.reactor = self.hal.get_reactor()
         self.mutex = self.reactor.mutex()
-        self.default_prefix = self.node.attr_get_choice("default_type", respond_types, default="echo")
+        self.default_prefix = self.node.attr_get_choice("default_type", choices=self.respond_types, default="echo")
         self.default_prefix = self.node.attr_get("default_prefix", default=self.default_prefix)
         # input handling
         self.input_log = collections.deque([], 50)
@@ -677,7 +677,7 @@ class Gcode(Object):
         software_version = self.printer.get_start_args().get('software_version')
         kw = {"FIRMWARE_NAME": "Klipper", "FIRMWARE_VERSION": software_version}
         self.ack(" ".join(["%s:%s" % (k, v) for k, v in kw.items()]))
-    cmd_M118_help = "Send a message to the host prefixed with '%s'" % (self.default_prefix,)
+    cmd_M118_help = "Send a message to the host"
     cmd_M118_ready_only = True
     def cmd_M118(self, params):
         if '#original' in params:

@@ -89,6 +89,8 @@ class Manager:
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if hasattr(node.object, "register") and callable(node.object.register):
                 node.object.register()
+        logging.info("- Autoloading extra printlets.")
+        self.get_printer().autoload(self)
         #logging.debug(self.show())
     def get_node(self, name):
         if name == "printer":

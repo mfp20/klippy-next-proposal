@@ -260,6 +260,7 @@ class Pins:
 #
 # Virtual pin that propagates its changes to multiple output pins
 #
+# TODO
 class MultiPin:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -309,6 +310,7 @@ class MultiPin:
 #
 # Support for custom board pin aliases
 #
+# TODO
 class CustomAliases:
     def __init__(self, config, chip_name):
         ppins = config.get_printer().lookup_object('pins')
@@ -334,6 +336,7 @@ class CustomAliases:
 #
 # Code to configure miscellaneous chips
 #
+# TODO
 PIN_MIN_TIME = 0.100
 class MCU_pin_out:
     def __init__(self, config):
@@ -384,6 +387,7 @@ class MCU_pin_out:
 #
 # Set the state of a list of digital output pins
 #
+# TODO
 class MCU_pin_out_multi:
     def __init__(self, config):
         printer = config.get_printer()
@@ -433,6 +437,7 @@ class MCU_pin_out_digital:
 
 # Bus synchronized digital outputs
 #   Helper code for a gpio that updates on a cmd_queue
+# TODO
 class MCU_pin_out_digital_queued:
     def __init__(self, mcu, pin_desc, cmd_queue=None, value=0):
         self.mcu = mcu
@@ -578,6 +583,7 @@ class MCU_pin_in_adc:
 # SAMD based boards have six internal serial modules that can be configured individually.
 # Some are available for mapping onto specific pins. 
 # These interfaces are hardware based and can be I2Cs, UARTs or SPIs types.
+# TODO
 class MCU_samd_sercom:
     def __init__(self, config):
         self.printer = config.get_printer()

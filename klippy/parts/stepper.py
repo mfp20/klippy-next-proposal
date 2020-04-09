@@ -8,7 +8,7 @@
 import logging, math
 from messaging import msg
 from messaging import Kerr as error
-import part, chelper
+import part, chelper, stepper, homing
 
 # Interface to low-level mcu and chelper code
 class MCU_stepper:
@@ -213,7 +213,6 @@ BUZZ_VELOCITY = BUZZ_DISTANCE / .250
 BUZZ_RADIANS_DISTANCE = math.radians(1.)
 BUZZ_RADIANS_VELOCITY = BUZZ_RADIANS_DISTANCE / .250
 STALL_TIME = 0.100
-
 # Calculate a move's accel_t, cruise_t, and cruise_v
 def calc_move_time(dist, speed, accel):
     axis_r = 1.
@@ -330,15 +329,11 @@ class ForceMove:
         toolhead.set_position([x, y, z, curpos[3]], homing_axes=(0, 1, 2))
         self.gcode.reset_last_position()
 
+#
 # Support for enable pins on stepper motor drivers
 #
-# Copyright (C) 2019  Kevin O'Connor <kevin@koconnor.net>
-#
-# This file may be distributed under the terms of the GNU GPLv3 license.
-import logging
-
+# TODO
 DISABLE_STALL_TIME = 0.100
-
 # Tracking of shared stepper enable pins
 class StepperEnablePin:
     def __init__(self, mcu_enable, enable_count):
@@ -453,18 +448,12 @@ class PrinterStepperEnable:
             raise self.printer.config_error("Unknown stepper '%s'" % (name,))
         return self.enable_lines[name]
 
-def load_config(config):
-    return PrinterStepperEnable(config)
+#
 # Support for a manual controlled stepper
 #
-# Copyright (C) 2019  Kevin O'Connor <kevin@koconnor.net>
-#
-# This file may be distributed under the terms of the GNU GPLv3 license.
-import stepper, homing, force_move, chelper
-
+# TODO
 ENDSTOP_SAMPLE_TIME = .000015
 ENDSTOP_SAMPLE_COUNT = 4
-
 class ManualStepper:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -585,5 +574,3 @@ class ManualStepper:
         elif 'SYNC' in params and sync:
             self.sync_print_time()
 
-def load_config_prefix(config):
-    return ManualStepper(config)

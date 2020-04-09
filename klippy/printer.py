@@ -165,6 +165,16 @@ class Main:
             logging.warning(msg(("noexist1", py_name)))
             return None
         return importlib.import_module('plugins.' + module_name)
+    def autoload(self, hal):
+        path = os.path.join(os.path.dirname(__file__), "printlets")
+        for file in os.listdir(path):
+            if file.endswith(".py") and not file.startswith("__init__"):
+                mod = importlib.import_module("printlets." + file.split(".")[0])
+                init_func = getattr(mod, "load_printlet", None)
+                #logging.debug("printlets.%s %s", file.split(".")[0], init_func)
+                if init_func is not None:
+                    return init_func(hal)
+                return None
     def _read_config(self):
         pconfig = configfile.PrinterConfig(self.hw)
         config = pconfig.read_main_config()
