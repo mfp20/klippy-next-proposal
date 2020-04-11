@@ -7,8 +7,7 @@
 import logging
 from messaging import msg
 from messaging import Kerr as error
-import governor
-
+import part, governor
 
 #
 # Verifier: periodical temperature checks
@@ -139,8 +138,6 @@ class PIDCalibrate:
         configfile.set(heater_name, 'pid_Ki', "%.3f" % (Ki,))
         configfile.set(heater_name, 'pid_Kd', "%.3f" % (Kd,))
 
-
-
 '''
 logging.info(temperature.sensor_factories)
 INFO:root:{'NTC 100K beta 3950': <function <lambda> at 0x70751013a150>, 'Honeywell 100K 135-104LAG-J01': <function <lambda> at 0x70751011ac50>, 'NTC 100K MGB18-104F39050L32': <function <lambda> at 0x70750feb6a50>, 'PT100 INA826': <function <lambda> at 0x70750feb6dd0>, 'ATC Semitec 104GT-2': <function <lambda> at 0x70751011ae50>, 'MAX31855': <class extras.spi_temperature.MAX31855 at 0x70750fec4360>, 'MAX31856': <class extras.spi_temperature.MAX31856 at 0x70750fec42f0>, 'AD8496': <function <lambda> at 0x70750feb6cd0>, 'AD8497': <function <lambda> at 0x70750feb6d50>, 'AD8494': <function <lambda> at 0x70750feb6bd0>, 'AD8495': <function <lambda> at 0x70750feb6c50>, 'MAX31865': <class extras.spi_temperature.MAX31865 at 0x70750fec4440>, 'EPCOS 100K B57560G104F': <function <lambda> at 0x70750feb6ad0>, 'PT1000': <function <lambda> at 0x70750feb6e50>, 'AD595': <function <lambda> at 0x70750feb6b50>, 'BME280': <class extras.bme280.BME280 at 0x70750fec4590>, 'MAX6675': <class extras.spi_temperature.MAX6675 at 0x70750fec43d0>}
@@ -158,10 +155,9 @@ logging.info(temperature.available_sensors)
 INFO:root:['heater_bed', 'extruder']
 '''
 
-class Object:
-    def __init__(self, hal, hnode):
-        self.hal = hal
-        self.node = hnode
+class Object(part.Object):
+    def __init__(self, hal, node):
+        part.Object.__init__(self, hal, node)
         self.govoff = governor.AlwaysOff()
         self.govon = governor.AlwaysOn()
         self.tcontroller = {}

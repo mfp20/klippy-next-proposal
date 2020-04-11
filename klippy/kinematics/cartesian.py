@@ -12,10 +12,13 @@ from kinematics.dummy import Object as Dummy
 ATTRS = ("type",)
 
 class Object(composite.Object):
+    def __init__(self,hal,node):
+        composite.Object.__init__(self,hal,node)
+        #self.metaconf[
     def init(self):
         if self.ready:
             return
-        thnode = self.node.children["toolhead "+self.node.get_id()]
+        thnode = self.child_get_first("toolhead "+self.id())
         toolhead = thnode.object
         # setup rails
         self.dual_carriage_axis = None
@@ -34,8 +37,8 @@ class Object(composite.Object):
             toolhead.register_step_generator(s.generate_steps)
         # setup boundary checks
         self.max_velocity, self.max_accel = toolhead.get_max_velocity()
-        self.max_z_velocity = thnode.attr_get_float("max_z_velocity", default=self.max_velocity, above=0., maxval=self.max_velocity)
-        self.max_z_accel = thnode.attr_get_float("max_z_accel", default=self.max_accel, above=0., maxval=self.max_accel)
+        self.max_z_velocity = thnode.object._max_z_velocity
+        self.max_z_accel = thnode.object._max_z_accel
         self.limits = [(1.0, -1.0)] * 3
         # setup stepper max halt velocity
         self.max_halt_velocity = toolhead.get_max_axis_halt()
@@ -44,8 +47,8 @@ class Object(composite.Object):
         self.rails[2].set_max_jerk(min(self.max_halt_velocity, self.max_z_velocity), self.max_accel)
         # setup dual-cart (if any)
         dc_axis = None
-        if "dual-cart" in self.node.attrs:
-            dc_axis = self.node.attrs["dual-cart"]
+        if hasattr(self, "_dual-cart"):
+            dc_axis = self._dual-cart
         if dc_axis:
             self.dual_carriage_axis = {'x': 0, 'y': 1}[dc_axis]
             dc_rail = railnodes[dc_axis][1].object
@@ -58,8 +61,8 @@ class Object(composite.Object):
         self.ready = True
     def register(self):
         self.hal.get_printer().register_event_handler("stepper_enable:motor_off", self._motor_off)
-        if "dual-cart" in self.node.attrs:
-            self.hal.get_gcode(self.node.get_id()).register_command('SET_DUAL_CARRIAGE', self.cmd_SET_DUAL_CARRIAGE, desc=self.cmd_SET_DUAL_CARRIAGE_help)
+        if hasattr(self, "_dual-cart"):
+            self.hal.get_gcode(self.id()).register_command('SET_DUAL_CARRIAGE', self.cmd_SET_DUAL_CARRIAGE, desc=self.cmd_SET_DUAL_CARRIAGE_help)
     def get_steppers(self):
         rails = self.rails
         if self.dual_carriage_axis is not None:

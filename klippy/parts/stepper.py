@@ -164,7 +164,7 @@ ATTRS_SPI = ("pin_miso", "pin_mosi", "pin_sck", "pin_cs")
 class Dummy(part.Object):
     def __init__(self, hal, node):
         part.Object.__init__(self, hal, node)
-        logging.warning("(%s) stepper.Dummy", node.name)
+        logging.warning("(%s) stepper.Dummy", self.name)
     def configure():
         if self.ready:
             return
@@ -173,19 +173,18 @@ class Dummy(part.Object):
 
 # Helper code to build a stepper object from hal
 class Object(part.Object):
+    def __init__(self, hal, node):
+        part.Object.__init__(self, hal, node)
+        self.metaconf["pin_step"] = {"t":"str"}
+        self.metaconf["pin_dir"] = {"t":"str"}
+        self.metaconf["step_distance"] = {"t":"float", "above":0.}
     def configure(self):
         if self.ready:
             return
-        self.step_pin_params = self.hal.get_controller().pin_register(self.node.attr_get("pin_step"), can_invert=True)
-        self.dir_pin_params = self.hal.get_controller().pin_register(self.node.attr_get("pin_dir"), can_invert=True)
-        self.step_dist = self.node.attr_get_float("step_distance", above=0.)
-        self.stepper = MCU_stepper(self.node.name, self.step_pin_params, self.dir_pin_params, self.step_dist)
-        # Support for stepper enable pin handling
-        #stepper_enable = printer.try_load_module(config, 'stepper_enable')
-        #stepper_enable.register_stepper(mcu_stepper, self.node.get('enable_pin', None))
-        # Register STEPPER_BUZZ command
-        #force_move = printer.try_load_module(config, 'force_move')
-        #force_move.register_stepper(mcu_stepper)
+        self.step_pin_params = self.hal.get_controller().pin_register(self._pin_step, can_invert=True)
+        self.dir_pin_params = self.hal.get_controller().pin_register(self._pin_dir, can_invert=True)
+        self.stepper = MCU_stepper(self.name, self.step_pin_params, self.dir_pin_params, self._step_distance)
+        self.hal.get_controller().register_part(self.node())
         self.ready = True
 
 def load_node_object(hal, node):

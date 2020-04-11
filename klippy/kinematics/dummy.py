@@ -10,7 +10,7 @@ import composite
 class Object(composite.Object):
     def __init__(self, hal, node):
         composite.Object.__init__(self,hal,node)
-        logging.warning("(%s) kinematics.Dummy", self.node.name)
+        logging.warning("(%s) kinematics.Dummy", self.name)
     def init(self):
         self.ready = True
 

@@ -195,12 +195,10 @@ DRIP_TIME = 0.100
 class DripModeEndSignal(Exception):
     pass
 
-ATTRS = ("x", "y", "z", "max_velocity", "max_accel", "max_z_velocity", "max_z_accel")
-
 class Dummy(composite.Object):
     def __init__(self, hal, node):
-	composite.Object.__init__(self,hal, node)
-        logging.warning("(%s) instrument.Dummy", self.node.name)
+	composite.Object.__init__(self,hal,node)
+        logging.warning("(%s) instrument.Dummy", self.name)
     def init(self):
         if self.ready:
             return
@@ -214,11 +212,26 @@ class Dummy(composite.Object):
 
 # Main code to track events (and their timing) on the printer toolhead
 class Object(composite.Object):
+    def __init__(self, hal, node):
+	composite.Object.__init__(self,hal,node)
+        #
+        self.metaconf["max_velocity"] = {"t":"float", "above":0.}
+        self.metaconf["max_accel"] = {"t":"float", "above":0.}
+        self.metaconf["max_accel_to_decel"] = {"t":"float", "default":"self._max_accel", "above":0.}
+        self.metaconf["square_corner_velocity"] = {"t":"float", "default":5., "minval":0.}
+        self.metaconf["max_z_velocity"] = {"t":"float", "default":"self._max_velocity", "above":0., "maxval":"self._max_velocity"}
+        self.metaconf["max_z_accel"] = {"t":"float", "default":"self._max_accel", "above":0., "maxval":"self._max_accel"}
+        #
+        self.metaconf["buffer_time_low"] = {"t":"float", "default":1.000, "above":0.}
+        self.metaconf["buffer_time_high"] = {"t":"float", "default":2.000, "above":"self._buffer_time_low"}
+        self.metaconf["buffer_time_start"] = {"t":"float", "default":0.250, "above":0.}
+        self.metaconf["move_flush_time"] = {"t":"float", "default":0.050, "above":0.}
+
     def init(self):
         if self.ready:
             return
-        self.gcode = self.hal.get_gcode(self.node.get_id())
-        self.kin = self.hal.get_kinematic(self.node.get_id())
+        self.gcode = self.hal.get_gcode(self.id())
+        self.kin = self.hal.get_kinematic(self.id())
         self.reactor = self.hal.get_reactor()
         self.all_mcus = self.hal.get_controller().list_mcus()
         self.mcu = self.all_mcus[0]
@@ -228,26 +241,19 @@ class Object(composite.Object):
         self.move_queue = MoveQueue(self)
         self.commanded_pos = [0., 0., 0., 0.]
         # Velocity and acceleration control
-        self.max_velocity = self.node.attr_get_float('max_velocity', above=0.)
-        self.max_accel = self.node.attr_get_float('max_accel', above=0.)
-        self.requested_accel_to_decel = self.node.attr_get_float('max_accel_to_decel', default=self.max_accel * 0.5, above=0.)
+        self.requested_accel_to_decel = self._max_accel_to_decel
         self.max_accel_to_decel = self.requested_accel_to_decel
-        self.square_corner_velocity = self.node.attr_get_float('square_corner_velocity', default=5., minval=0.)
-        self.config_max_velocity = self.max_velocity
-        self.config_max_accel = self.max_accel
-        self.config_square_corner_velocity = self.square_corner_velocity
+        self.config_max_velocity = self._max_velocity
+        self.config_max_accel = self._max_accel
+        self.config_square_corner_velocity = self._square_corner_velocity
         self.junction_deviation = 0.
         self._calc_junction_deviation()
         # Print time tracking
-        self.buffer_time_low = self.node.attr_get_float('buffer_time_low', default=1.000, above=0.)
-        self.buffer_time_high = self.node.attr_get_float('buffer_time_high', default=2.000, above=self.buffer_time_low)
-        self.buffer_time_start = self.node.attr_get_float('buffer_time_start', default=0.250, above=0.)
-        self.move_flush_time = self.node.attr_get_float('move_flush_time', default=0.050, above=0.)
         self.print_time = 0.
         self.special_queuing_state = "Flushed"
         self.need_check_stall = -1.
         self.flush_timer = self.reactor.register_timer(self._flush_handler)
-        self.move_queue.set_flush_time(self.buffer_time_high)
+        self.move_queue.set_flush_time(self._buffer_time_high)
         self.last_print_start_time = 0.
         self.idle_flush_print_time = 0.
         self.print_stall = 0
@@ -526,22 +532,20 @@ class Object(composite.Object):
     def note_kinematic_activity(self, kin_time):
         self.last_kin_move_time = max(self.last_kin_move_time, kin_time)
     def get_max_velocity(self):
-        return self.max_velocity, self.max_accel
+        return self._max_velocity, self._max_accel
     def get_max_axis_halt(self):
         # Determine the maximum velocity a cartesian axis could halt
         # at due to the junction_deviation setting.  The 8.0 was
         # determined experimentally.
-        return min(self.max_velocity,
-                   math.sqrt(8. * self.junction_deviation * self.max_accel))
+        return min(self._max_velocity, math.sqrt(8. * self.junction_deviation * self._max_accel))
     def _calc_junction_deviation(self):
-        scv2 = self.square_corner_velocity**2
-        self.junction_deviation = scv2 * (math.sqrt(2.) - 1.) / self.max_accel
-        self.max_accel_to_decel = min(self.requested_accel_to_decel,
-                                      self.max_accel)
+        scv2 = self._square_corner_velocity**2
+        self.junction_deviation = scv2 * (math.sqrt(2.) - 1.) / self._max_accel
+        self.max_accel_to_decel = min(self.requested_accel_to_decel, self._max_accel)
     cmd_SET_VELOCITY_LIMIT_help = "Set default acceleration"
     def cmd_SET_VELOCITY_LIMIT(self, params):
         print_time = self.get_last_move_time()
-        gcode = self.node.get_gcode(self.node.get_id())
+        gcode = self.node.get_gcode(self.node.id())
         max_velocity = gcode.get_float('VELOCITY', params, self.max_velocity, above=0.)
         max_accel = gcode.get_float('ACCEL', params, self.max_accel, above=0.)
         square_corner_velocity = gcode.get_float('SQUARE_CORNER_VELOCITY', params, self.square_corner_velocity, minval=0.)
@@ -573,6 +577,7 @@ class Object(composite.Object):
         self.max_accel = min(accel, self.config_max_accel)
         self._calc_junction_deviation()
 
+ATTRS = ("x", "y", "z", "max_velocity", "max_accel", "max_z_velocity", "max_z_accel")
 def load_node_object(hal, node):
     #logging.debug("LOAD %s", node.name)
     config_ok = True
@@ -588,6 +593,6 @@ def load_node_object(hal, node):
     else:
         node.object = Dummy(hal, node)
         # force dummy kinematic too
-        kin = node.node_get_parent(hal.tree.printer, node.name)
+        kin = node.parent(hal.tree.printer, node.name)
         kin.object = DummyKinematic(hal, kin)
 

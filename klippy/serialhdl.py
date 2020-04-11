@@ -12,12 +12,13 @@ class error(Exception):
 
 class SerialReader:
     BITS_PER_BYTE = 10.
-    def __init__(self, reactor, serialport, baud):
+    def __init__(self, reactor, serialport, baud, rts = True):
         self.reactor = reactor
         self.serialport = serialport
         self.baud = baud
         # Serial port
         self.ser = None
+        self.rts = rts
         self.msgparser = msgproto.MessageParser()
         # C interface
         self.ffi_main, self.ffi_lib = chelper.get_ffi()
@@ -75,7 +76,7 @@ class SerialReader:
                 identify_data += msgdata
     def connect(self):
         # Initial connection
-        logging.info("Starting serial connect")
+        logging.info("- Starting serial connect to '%s' at '%s' baud.", self.serialport, self.baud)
         start_time = self.reactor.monotonic()
         while 1:
             connect_time = self.reactor.monotonic()
@@ -83,8 +84,10 @@ class SerialReader:
                 raise error("Unable to connect")
             try:
                 if self.baud:
-                    self.ser = serial.Serial(
-                        self.serialport, self.baud, timeout=0, exclusive=True)
+                    self.ser = serial.Serial(self.serialport, self.baud, timeout=0, exclusive=True)
+                    #self.ser.port = self.serialport
+                    #self.ser.rts = self.rts
+                    #self.ser.open()
                 else:
                     self.ser = open(self.serialport, 'rb+')
             except (OSError, IOError, serial.SerialException) as e:
@@ -93,8 +96,7 @@ class SerialReader:
                 continue
             if self.baud:
                 stk500v2_leave(self.ser, self.reactor)
-            self.serialqueue = self.ffi_lib.serialqueue_alloc(
-                self.ser.fileno(), 0)
+            self.serialqueue = self.ffi_lib.serialqueue_alloc(self.ser.fileno(), 0)
             self.background_thread = threading.Thread(target=self._bg_thread)
             self.background_thread.start()
             # Obtain and load the data dictionary from the firmware
@@ -264,6 +266,32 @@ def stk500v2_leave(ser, reactor):
     res = ser.read(4096)
     logging.debug("Got %s from stk500v2", repr(res))
     ser.baudrate = origbaud
+
+def cheetah_reset(serialport, reactor):
+    # Fysetc Cheetah v1.2 boards have a weird stateful circuitry for
+    # configuring the bootloader. This sequence takes care of disabling it for
+    # sure.
+    # Open the serial port with RTS asserted
+    ser = serial.Serial(baudrate=2400, timeout=0, exclusive=True)
+    ser.port = serialport
+    ser.rts = True
+    ser.open()
+    ser.read(1)
+    reactor.pause(reactor.monotonic() + 0.100)
+    # Toggle DTR
+    ser.dtr = True
+    reactor.pause(reactor.monotonic() + 0.100)
+    ser.dtr = False
+    # Deassert RTS
+    reactor.pause(reactor.monotonic() + 0.100)
+    ser.rts = False
+    reactor.pause(reactor.monotonic() + 0.100)
+    # Toggle DTR again
+    ser.dtr = True
+    reactor.pause(reactor.monotonic() + 0.100)
+    ser.dtr = False
+    reactor.pause(reactor.monotonic() + 0.100)
+    ser.close()
 
 # Attempt an arduino style reset on a serial port
 def arduino_reset(serialport, reactor):

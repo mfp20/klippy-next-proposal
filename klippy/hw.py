@@ -4,7 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, sys, cPickle as pickle
+import logging, sys, collections, cPickle as pickle
 from StringIO import StringIO
 
 from messaging import msg
@@ -21,7 +21,7 @@ class Manager:
         self.tree.printer.children["hal"].module = sys.modules[__name__]
         self.tree.printer.children["hal"].object = self
         self.tree.printer.child_set(tree.PrinterNode("reactor"))
-        self.get_node("reactor").object = reactor.Reactor(self, self.get_node("reactor"))
+        self.node("reactor").object = reactor.Reactor(self, self.node("reactor"))
         self.pgroups = ["mcu", "sensor", "stepper", "heater", "cooler", "nozzle"]
         self.cgroups = ["tool", "cart", "rail"]
         self.mcu_count = 0
@@ -32,24 +32,31 @@ class Manager:
     def add_cgroup(self, cgroup):
         self.cgroups.append(cgroup)
     def load_tree_objects(self):
-        #logging.debug(self.show(plus="module,object"))
+        #logging.debug(self.show(plus="module"))
         logging.info("- Loading printer objects.")
         # load commander
-        self.get_node("commander").object = self.get_node("commander").module.Dispatch(self, self.get_node("commander"))
+        self.node("commander").object = self.node("commander").module.Dispatch(self, self.node("commander"))
+        self.node("commander").attrs2obj()
         # load controller
-        controller.load_node_object(self, self.get_node("controller"))
+        controller.load_node_object(self, self.node("controller"))
+        self.node("controller").attrs2obj()
         # load clock
-        timing.load_node_object(self, self.get_node("timing"))
+        timing.load_node_object(self, self.node("timing"))
+        self.node("timing").attrs2obj()
         # load thermal controller
-        temperature.load_node_object(self, self.get_node("temperature"))
+        temperature.load_node_object(self, self.node("temperature"))
         # for each node, create its object
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if not node.object:
                 # load object and check
                 if hasattr(node.module, "load_node_object") and callable(node.module.load_node_object):
                     node.module.load_node_object(self, node)
+                    if hasattr(node, "attrs"):
+                        node.attrs2obj()
                 if not node.object:
-                    logging.warning("\t\t- CAN'T LOAD: ..:%s:%s", node.node_get_parent(self.tree.printer, node.name).name, node.name)
+                    parent = node.parent(self.tree.printer, node.name)
+                    logging.warning("\t\t- CAN'T LOAD '..:%s:%s'. Moving to spares.", node.parent(self.tree.printer, node.name).name, node.name)
+                    self.tree.spare.children[node.name] = parent.children.pop(node.name)
         # build/configure (if needed) each printer shallow children
         logging.info("- Building and configuring objects.")
         for name,node in self.tree.printer.children.items():
@@ -60,8 +67,8 @@ class Manager:
                     and not node.name.startswith("kinematic "):
                 if node.object:
                     # build printer's children
-                    if hasattr(node.object, "build") and callable(node.object.build):
-                        node.object.build()
+                    if hasattr(node.object, "_build") and callable(node.object._build):
+                        node.object._build()
                     # configure printer's leaves
                     if hasattr(node.object, "configure") and callable(node.object.configure):
                         node.object.configure()
@@ -70,29 +77,32 @@ class Manager:
         # configure toolhead(s)
         for t in self.tree.printer.children_deep_byname("toolhead ", list()): 
             if isinstance(t.object, instrument.Object):
-                t.object.build()
+                t.object._build()
             else:
                 t.object.init()
         # init kinematics
         for k in self.tree.printer.children_deep_byname("kinematic ", list()):
             k.object.init()
-        # last check, and printer init
+        # last check before linking objects with "register()"
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if hasattr(node.object, "ready"):
                 if not node.object.ready:
-                    logging.debug("\t %s NOT READY.", node.name)
+                    logging.debug("\t %s NOT READY. Moving to spares.", node.name)
+                    self.tree.spare.children[node.name] = node.parent(self.tree.printer, node.name).children.pop(node.name)
             else:
                 if node.name != "printer":
-                    logging.debug("\t %s NOT READY.", node.name)
+                    logging.debug("\t %s NOT READY. Moving to spares.", node.name)
+                    self.tree.spare.children[node.name] = node.parent(self.tree.printer, node.name).children.pop(node.name)
+        # for each node, run object.register() (if any)
         logging.info("- Registering events and commands.")
-        # for each node, run object.register()
         for node in self.tree.printer.children_deep(list(), self.tree.printer):
             if hasattr(node.object, "register") and callable(node.object.register):
                 node.object.register()
+        # load printer's sniplets, development code to be tested
         logging.info("- Autoloading extra printlets.")
         self.get_printer().autoload(self)
-        #logging.debug(self.show())
-    def get_node(self, name):
+        logging.debug(self.show(plus="object"))
+    def node(self, name):
         if name == "printer":
             return self.tree.printer
         elif name == "reactor":
@@ -110,41 +120,41 @@ class Manager:
         else:
             return self.tree.printer.child_get_first(name)
     def attr_set(self, nodename, attrname, value):
-        self.get_node(nodename).attr_set(attrname, value)
+        self.node(nodename).attr_set(attrname, value)
     def get_attr(self, nodename, attrname):
-        return self.get_node(nodename).attrs[attrname]
+        return self.node(nodename).attrs[attrname]
     def get_object(self, name):
-        return get_node(name).object
+        return self.node(name).object
     def get_printer(self):
-        return self.get_node("printer").object
+        return self.node("printer").object
     def get_reactor(self):
-        return self.get_node("reactor").object
+        return self.node("reactor").object
     def get_commander(self):
-        return self.get_node("commander").object
+        return self.node("commander").object
     def get_controller(self):
-        return self.get_node("controller").object
+        return self.node("controller").object
     def get_timing(self):
-        return self.get_node("timing").object
+        return self.node("timing").object
     def get_temperature(self):
-        return self.get_node("temperature").object
+        return self.node("temperature").object
     def get_hal(self):
-        return self.get_node("hal").object
+        return self.node("hal").object
     def get_toolhead(self, name = None):
         if name:
-            return self.get_node("toolhead "+name).object
+            return self.node("toolhead "+name).object
         else:
             logging.warning("(FIXME) No toolhead selected, returning first toolhead in tree")
             self.tree.printer.child_get_first("toolhead ")
-            return thnode.children["gcode "+thnode.get_id()].object
+            return thnode.children["gcode "+thnode.id()].object
     def get_gcode(self, name = None):
         if name:
-            return self.get_node("gcode "+name).object
+            return self.node("gcode "+name).object
         else:
             logging.warning("(FIXME) No toolhead selected, returning first gcode in tree")
             thnode = self.tree.printer.child_get_first("toolhead ")
-            return thnode.children["gcode "+thnode.get_id()].object
+            return thnode.children["gcode "+thnode.id()].object
     def get_my_gcode(self, child):
-        parent = child.node_get_parent(self, child.name)
+        parent = child.parent(self, child.name)
         if parent.name.startswith("toolhead "):
             return parent.children["gcode "+parent.name.split(" ")[1]].object
         else:
@@ -153,13 +163,13 @@ class Manager:
             return self.get_my_gcode(parent)
     def get_kinematic(self, name = None):
         if name:
-            return self.get_node("kinematic "+name).object
+            return self.node("kinematic "+name).object
         else:
             logging.warning("(FIXME) No toolhead selected, returning first kinematic in tree")
             thnode = self.tree.printer.child_get_first("toolhead ")
-            return thnode.children["kinematic "+thnode.get_id()].object
+            return thnode.children["kinematic "+thnode.id()].object
     def get_my_kinematic(self, child):
-        parent = child.node_get_parent(self, child.name)
+        parent = child.parent(self, child.name)
         if parent.name.startswith("kinematic "):
             return parent.object
         else:
@@ -178,8 +188,8 @@ class Manager:
     def unfreeze_object(self, obj):
         in_s = StringIO(obj)
         return pickle.load(in_s)
-    def show(self, indent=2, plus = "object"):
+    def show(self, indent=2, plus = ""):
         return self.tree.show(indent, plus)
     def ready(self):
-        logging.debug(self.show())
+        logging.debug(self.show(plus="details"))
 

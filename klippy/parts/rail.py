@@ -16,7 +16,7 @@ ATTRS = ("position_min", "position_max")
 class Dummy(composite.Object):
     def __init__(self, hal, node):
         composite.Object.__init__(self, hal, node)
-        logging.warning("(%s) rail.Dummy", node.name)
+        logging.warning("(%s) rail.Dummy", self.get_name())
     def init():
         if self.ready:
             return
@@ -26,6 +26,16 @@ class Dummy(composite.Object):
 
 # A motor control "rail" with one (or more) steppers and one (or more) endstops.
 class Object(composite.Object):
+    def __init__(self, hal, node):
+        composite.Object.__init__(self, hal, node)
+        self.metaconf["position_min"] = {"t":"float", "default":0.}
+        self.metaconf["position_endstop_min"] = {"t":"float"}
+        self.metaconf["position_max"] = {"t":"float", "above":"self._position_min"}
+        self.metaconf["homing_speed"] = {"t":"float", "default":5.0, "above":0.}
+        self.metaconf["second_homing_speed"] = {"t":"float", "default":"self._homing_speed", "above":0.}
+        self.metaconf["homing_retract_speed"] = {"t":"float", "default":"self._homing_speed", "above":0.}
+        self.metaconf["homing_retract_dist"] = {"t":"float", "default":5., "minval":0.}
+        self.metaconf["homing_positive_dir"] = {"t":"bool", "default":False}
     def init(self):
         if self.ready:
             return
@@ -34,12 +44,12 @@ class Object(composite.Object):
         self.need_position_minmax = True
         self.default_position_endstop = None
         # steppers
-        for s in self.node.object.children_bygroup("stepper"):
+        for s in self.children_bygroup("stepper"):
             self.steppers.append(s.object.stepper)
         # endstops
         for e in ["sensor_min", "sensor_max", "sensor_level"]:
-            if e in self.node.attrs:
-                en = self.node.child_get_first("sensor "+self.node.attrs[e])
+            if hasattr(self, "_"+e):
+                en = self.child_get_first("sensor "+self.conf[e])
                 if en:
                     for s in self.steppers:
                         en.object.sensor.add_stepper(s)
@@ -66,38 +76,38 @@ class Object(composite.Object):
         if hasattr(mcu_endstop, "get_position_endstop"):
             self.position_endstop = mcu_endstop.get_position_endstop()
         elif default_position_endstop is None:
-            self.position_endstop = self.node.attr_get_float("position_endstop_min")
+            self.position_endstop = self._position_endstop_min
         else:
-            self.position_endstop = self.node.attr_get_float("position_endstop_min", default=default_position_endstop)
+            if "position_endstop_min" in self.node().attrs:
+                self.position_endstop = self._position_endstop_min
+            else:
+                self.position_endstop = default_position_endstop
     def setup_axis_range(self, need_position_minmax = True, default_position_endstop = None):
         self.need_position_minmax = need_position_minmax
         self.setup_position_endstop(default_position_endstop)
         if need_position_minmax:
             self.need_position_minmax = True
-            self.position_min = self.node.attr_get_float('position_min', default=0.)
-            self.position_max = self.node.attr_get_float('position_max', above=self.position_min)
+            self.position_min = self._position_min
+            self.position_max = self._position_max
         else:
             self.need_position_minmax = False
             self.position_min = 0.
             self.position_max = self.position_endstop
         if (self.position_endstop < self.position_min or self.position_endstop > self.position_max):
-            raise error("position_endstop in section '%s' must be between position_min and position_max" % self.node.name)
+            raise error("position_endstop in section '%s' must be between position_min and position_max" % self.name)
     # delta/rotarydelta printers kinematic need to call this after rail init to set need_position_minmax and default_position_endstop
     def setup_homing(self, need_position_minmax = True, default_position_endstop = None):
         self.setup_axis_range(need_position_minmax, default_position_endstop)
-        self.homing_speed = self.node.attr_get_float('homing_speed', default=5.0, above=0.)
-        self.second_homing_speed = self.node.attr_get_float('second_homing_speed', default=self.homing_speed/2., above=0.)
-        self.homing_retract_speed = self.node.attr_get_float('homing_retract_speed', default=self.homing_speed, above=0.)
-        self.homing_retract_dist = self.node.attr_get_float('homing_retract_dist', default=5., minval=0.)
-        self.homing_positive_dir = self.node.attr_get('homing_positive_dir', True, default=False)
-        if self.homing_positive_dir is None:
-            axis_len = self.position_max - self.position_min
-            if self.position_endstop <= self.position_min + axis_len / 4.:
-                self.homing_positive_dir = False
-            elif self.position_endstop >= self.position_max - axis_len / 4.:
-                self.homing_positive_dir = True
+        if self._second_homing_speed == self._homing_speed:
+            self._second_homing_speed = self._homing_speed/2.
+        if self._homing_positive_dir is None:
+            axis_len = self._position_max - self._position_min
+            if self.position_endstop <= self._position_min + axis_len / 4.:
+                self._homing_positive_dir = False
+            elif self.position_endstop >= self._position_max - axis_len / 4.:
+                self._homing_positive_dir = True
             else:
-                raise error("Unable to infer homing_positive_dir in section '%s'" % (self.node.name,))
+                raise error("Unable to infer homing_positive_dir in section '%s'" % (self.name,))
     def get_range(self):
         return self.position_min, self.position_max
     def get_homing_info(self):

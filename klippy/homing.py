@@ -315,6 +315,7 @@ class HomingSafeZ:
 #
 # Heater handling on homing moves
 #
+# TODO
 class HomingHeaters:
     def __init__(self, config):
         self.printer = config.get_printer()

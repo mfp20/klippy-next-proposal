@@ -6,7 +6,8 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
-import sensor, controller
+import controller
+from parts import sensor
 
 # Interface to low-level mcu and chelper code
 class MCU_endstop:
@@ -120,13 +121,12 @@ class MCU_endstop:
 # Endstop
 #
 
-ATTRS = ("type", "pin")
 
 # TODO 
 class Dummy(sensor.Object):
     def __init__(self, hal, node):
         sensor.Object.__init__(self, hal, node)
-        logging.warning("(%s) endstop.Dummy", node.name)
+        logging.warning("(%s) endstop.Dummy", self.name)
     def configure():
         if self.ready:
             return
@@ -134,12 +134,18 @@ class Dummy(sensor.Object):
         self.ready = True
 
 class Object(sensor.Object):
+    def __init__(self, hal, node):
+        sensor.Object.__init__(self, hal, node)
+        self.metaconf["type"] = {"t":"str", "default":"endstop"}
+        self.metaconf["pin"] = {"t":"str"}
     def configure(self):
         if self.ready:
             return
-        self.sensor = self.hal.get_controller().pin_setup("endstop", self.node.attrs["pin"])
+        self.sensor = self.hal.get_controller().pin_setup("endstop", self._pin)
+        self.hal.get_controller().register_part(self.node())
         self.ready = True
 
+ATTRS = ("type", "pin")
 def load_node_object(hal, node):
     if node.attrs_check():
         node.object = Object(hal, node)

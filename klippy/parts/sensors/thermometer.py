@@ -8,7 +8,7 @@
 import logging, bisect, math, random
 from messaging import msg
 from messaging import Kerr as error
-import sensor
+from parts import sensor
 
 KELVIN_TO_CELSIUS = -273.15
 
@@ -272,7 +272,7 @@ thermistor = {
     "Honeywell 100K 135-104LAG-J01": { 't1': 25., 'r1': 100000., 'beta': 3974.},
     "NTC 100K MGB18-104F39050L32": { 't1': 25., 'r1': 100000., 'beta': 4100. },
 }
-adc = {
+adc_voltage = {
     "AD595": AD595,
     "AD8494": AD8494,
     "AD8495": AD8495,
@@ -280,7 +280,9 @@ adc = {
     "AD8497": AD8497,
     "PT100": PT100,
     "INA826": PT100,
-    "PT1000": PT1000
+}
+adc_resistance = {
+    "PT1000": PT1000,
 }
 i2c = {
     "BME280": None,
@@ -292,47 +294,10 @@ spi = {
     "MAX31865": None,
 }
 
-class ADC:
-    def __init__(self, params):
-        self.probe = None
-        # non linear approximation (Steinhart-Hart)
-        if "inline" in params:
-            self.probe = NonLinearResistance(params["name"], params["pullup"], params["inline"], params["params"])
-        # linear approximation (interpolation)
-        else:
-            # standard, resistance
-            if params["model"] == "PT1000":
-                self.probe = LinearResistance(params["name"], params["pullup"], params["params"])
-            # standard, voltage
-            elif params["model"] in adc:
-                self.probe = LinearVoltage(params["name"], params["voltage"], params["offset"], params["params"])
-            # custom, voltage
-            elif "voltage" in params:
-                self.probe = LinearVoltage(params["name"], params["voltage"], params["offset"], params["params"])
-            # custom, resistance
-            elif "pullup" in params:
-                self.probe = LinearResistance(params["name"], params["pullup"], params["params"])
-            else:
-                # doesn't exist TODO an error message
-                raise
-
-# TODO
-class I2C(sensor.Object):
-    def __init__(self, params):
-        logging.warning("TODO i2c thermometer")
-        self.probe = None
-
-# TODO
-class SPI(sensor.Object):
-    def __init__(self, params):
-        logging.warning("TODO spi thermometer")
-        self.probe = None
-
 ######################################################################
 # Thermometer
 ######################################################################
 
-ATTRS = ("type", "model")
 SAMPLE_TIME = 0.001
 SAMPLE_COUNT = 8
 REPORT_TIME = 0.300
@@ -342,7 +307,7 @@ RANGE_CHECK_COUNT = 4
 class Dummy(sensor.Object):
     def __init__(self, hal, node):
         sensor.Object(hal,node)
-        logging.warning("(%s) thermometer.Dummy", self.node.name)
+        logging.warning("(%s) thermometer.Dummy", self.name)
     def configure(self):
         if self.ready:
             return
@@ -414,98 +379,198 @@ class Dummy(sensor.Object):
     def get_report_time_delta(self):
         return REPORT_TIME
 
+class Object(sensor.Object):
+    def __init__(self,hal,node):
+        sensor.Object.__init__(self,hal,node)
+
 # TODO attrs checks for each model of sensor
 # TODO test custom sensors
-class Object(sensor.Object):
+class ADC(Object):
+    def __init__(self, hal, node, params):
+        Object.__init__(self,hal,node)
+        self._params = params
+        self.probe = None
     def configure(self):
         if self.ready:
             return
-        # setup thermometer probe
-        params = {}
-        params["name"] = self.node.get_id()
-        params["model"] = self.node.attrs["model"]
-        # thermistor sensor
-        if self.node.attrs["model"] in thermistor:
-            params["pullup"] = self.node.attr_get_float("pullup", default=4700., above=0.)
-            params["inline"] = self.node.attr_get_float("inline", default=0., minval=0.)
-            params["params"] = thermistor[self.node.attrs["model"]]
-            self.sensor = ADC(params)
-        # adc sensor
-        elif self.node.attrs["model"] in adc:
-            if "pullup" in self.node.attrs:
-                params["pullup"] = self.node.attr_get_float("pullup", above=0., default=4700.)
-            else: 
-                params["voltage"] = self.node.attr_get_float("voltage", above=0., default=5.)
-                params["offset"] = self.node.attr_get_float("offset", default=0.0)
-            params["params"] = adc[self.node.attrs["model"]]
-            self.sensor = ADC(params)
-        # i2c digital sensor
-        elif self.node.attrs["model"] in i2c:
-            self.sensor = I2C(self.node)
-        # spi digital sensor
-        elif self.node.attrs["model"] in spi:
-            self.sensor = SPI(self.node)
-        # same, but custom calibration
-        elif self.node.attrs["model"].startswith("custom "):
-            name = node.attrs["model"].split(" ")
-            if name[1] == "thermistor":
-                params["pullup"] = self.node.attr_get_float("pullup", 4700., above=0.)
-                params["inline"] = self.node.attr_get_float("inline", 0., minval=0.)
-                # get samples
-                t1 = self.node.attr_get_float("t1", minval=KELVIN_TO_CELSIUS)
-                r1 = self.node.attr_get_float("r1", minval=0.)
-                if "beta" in self.node.attrs:
-                    beta = node.attr_get_float("beta", None, above=0.)
-                    if beta is not None:
-                        self.params = {'t1': t1, 'r1': r1, 'beta': beta}
-                        return
-                t2 = node.attr_get_float("t2", minval=KELVIN_TO_CELSIUS)
-                r2 = node.attr_get_float("r2", minval=0.)
-                t3 = node.attr_get_float("t3", minval=KELVIN_TO_CELSIUS)
-                r3 = node.attr_get_float("r3", minval=0.)
-                (t1, r1), (t2, r2), (t3, r3) = sorted([(t1, r1), (t2, r2), (t3, r3)])
-                params["params"] = {'t1': t1, 'r1': r1, 't2': t2, 'r2': r2, 't3': t3, 'r3': r3}
-                self.sensor = ADC(params)
-            elif name[1] == "adc":
-                self.key = ""
-                if "pullup" in self.node.attrs:
-                    self.key = "r"
-                    params["pullup"] = self.node.attr_get_float('pullup', 4700., above=0.)
-                else: 
-                    self.key = "v"
-                    params["voltage"] = self.node.attr_get_float('voltage', 5., above=0.)
-                    params["offset"] = self.node.attr_get_float('offset', 0.0)
-                # get samples
-                params["params"] = []
-                for i in range(1, 1000):
-                    t = self.node.attr_get_float("t%d" % (i,), None)
-                    if t is None:
-                        break
-                    v = self.node.attr_get_float(self.key+"%d" % (i,))
-                    params["params"].append((t, v))
-                self.sensor = ADC(params)
-            elif name[1] == "i2c":
-                self.sensor = I2C(params)
-            elif name[1] == "spi":
-                self.sensor = SPI(params)
-        # register thermometer
-        self.pin = self.hal.get_controller().pin_setup("adc", self.node.attr_get("pin"))
+        # non linear approximation (Steinhart-Hart)
+        if hasattr(self, "_inline"):
+            self.probe = NonLinearResistance(self.name, self._pullup, self._inline, self._params)
+        # linear approximation (interpolation)
+        else:
+            # standard, resistance
+            if self._model in adc_resistance:
+                self.probe = LinearResistance(self.name, self._pullup, self._params)
+            # standard, voltage
+            elif self._model in adc_voltage:
+                self.probe = LinearVoltage(self.name, self._voltage, self._offset, self._params)
+            # custom, voltage
+            elif "voltage" in params:
+                self.probe = LinearVoltage(self.name, self._voltage, self._offset, self._params)
+            # custom, resistance
+            elif "pullup" in params:
+                self.probe = LinearResistance(self.name, self._pullup, self._params)
+            else:
+                # doesn't exist TODO an error message
+                raise
+        # register adc pin
+        self.pin = self.hal.get_controller().pin_setup("adc", self._pin)
         self.pin.setup_callback(REPORT_TIME, self._cb)
         self.ready = True
+    def register(self):
+        # register thermometer
+        self.hal.get_controller().register_part(self.node())
     def setup_minmax(self, min_temp, max_temp):
-        adc_range = [self.sensor.probe.calc_adc(t) for t in [min_temp, max_temp]]
+        adc_range = [self.probe.calc_adc(t) for t in [min_temp, max_temp]]
         self.pin.setup_minmax(SAMPLE_TIME, SAMPLE_COUNT, minval=min(adc_range), maxval=max(adc_range), range_check_count=RANGE_CHECK_COUNT)
     def setup_cb(self, temperature_callback):
         self.temperature_callback = temperature_callback
     def _cb(self, read_time, read_value):
-        temp = self.sensor.probe.calc_temp(read_value)
-        self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp, self.node.name)
+        temp = self.probe.calc_temp(read_value)
+        self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp, self.name)
     def get_report_time_delta(self):
         return REPORT_TIME
 
+# TODO
+class I2C(sensor.Object):
+    def __init__(self, hal, node, params):
+        Object.__init__(self,hal,node)
+        logging.warning("TODO i2c thermometer")
+        self.probe = None
+    def configure(self):
+        if self.ready:
+            return
+        # TODO
+        self.ready = True
+    def setup_minmax(self, min_temp, max_temp):
+        # TODO
+        pass
+    def setup_cb(self, temperature_callback):
+        # TODO
+        pass
+    def _cb(self, read_time, read_value):
+        # TODO
+        pass
+    def get_report_time_delta(self):
+        return REPORT_TIME
+
+# TODO
+class SPI(sensor.Object):
+    def __init__(self, hal, node, params):
+        Object.__init__(self,hal,node)
+        logging.warning("TODO spi thermometer")
+        self.probe = None
+    def configure(self):
+        if self.ready:
+            return
+        # TODO
+        self.ready = True
+    def setup_minmax(self, min_temp, max_temp):
+        # TODO
+        pass
+    def setup_cb(self, temperature_callback):
+        # TODO
+        pass
+    def _cb(self, read_time, read_value):
+        # TODO
+        pass
+    def get_report_time_delta(self):
+        return REPORT_TIME
+
+# TODO
+class Custom(sensor.Object):
+    def __init__(self, hal, node, params):
+        Object.__init__(self,hal,node)
+        logging.warning("TODO custom thermometer")
+        self.probe = None
+    def configure(self):
+        if self.ready:
+            return
+        # TODO
+        name = self._model.split(" ")
+        if name[1] == "thermistor":
+            params["pullup"] = self._pullup
+            params["inline"] = self._inline
+            # get samples
+            t1 = self._t1
+            r1 = self._r1
+        if hasattr(self, "_beta"):
+            return
+        # TODO load all samples (ie: not only t2 and t3)
+        for i in range(1, 1000):
+            #t = self.conf_get_float("t%d" % (i,), None)
+            #if t is None:
+            #    break
+            #v = self.conf_get_float(self.key+"%d" % (i,))
+            #params["params"].append((t, v))
+            pass
+        t2 = self._t2
+        r2 = self._r2
+        t3 = self._t3
+        r3 = self._r3
+        (t1, r1), (t2, r2), (t3, r3) = sorted([(t1, r1), (t2, r2), (t3, r3)])
+        params["params"] = {'t1': t1, 'r1': r1, 't2': t2, 'r2': r2, 't3': t3, 'r3': r3}
+        self.ready = True
+    def setup_minmax(self, min_temp, max_temp):
+        # TODO
+        pass
+    def setup_cb(self, temperature_callback):
+        # TODO
+        pass
+    def _cb(self, read_time, read_value):
+        # TODO
+        pass
+    def get_report_time_delta(self):
+        return REPORT_TIME
+
+ATTRS = ("type","model")
 def load_node_object(hal, node):
     if node.attrs_check():
-        node.object = Object(hal, node)
+        if node.attr("model") in thermistor:
+            node.object = ADC(hal, node, thermistor[node.attr("model")])
+            node.object.metaconf["model"] = {"t":"str"}
+            node.object.metaconf["pin"] = {"t": "str"}
+            node.object.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
+            node.object.metaconf["inline"] = {"t":"float", "default":0., "minval":0.}
+        elif node.attr("model") in adc_voltage:
+            node.object = ADC(hal, node, adc_voltage[node.attr("model")])
+            node.object.metaconf["model"] = {"t":"str"}
+            node.object.metaconf["pin"] = {"t": "str"}
+            node.object.metaconf["voltage"] = {"t":"float", "default":5., "above":0.}
+            node.object.metaconf["offset"] = {"t":"float", "default":0.}
+        elif node.attr("model") in adc_resistance:
+            node.object = ADC(hal, node, adc_resistance[node.attr("model")])
+            node.object.metaconf["model"] = {"t":"str"}
+            node.object.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
+        elif node.attr("model") in i2c:
+            # TODO
+            bus = None
+            node.object = I2C(hal, node)
+            node.object.metaconf["model"] = {"t":"str"}
+            node.object.metaconf["bus"] = {"t": "str"}
+            node.object.metaconf["samples"] = {"t":"str"}
+        elif node.attr("model") in spi:
+            # TODO
+            bus = None
+            node.object = SPI(hal, node, bus)
+            node.object.metaconf["model"] = {"t":"str"}
+            node.object.metaconf["bus"] = {"t": "str"}
+            node.object.metaconf["samples"] = {"t":"str"}
+        elif node.attr("model").startswith("custom "):
+            # TODO
+            node.object = Custom(hal, node, bus)
+            node.object.metaconf["model"] = {"t":"str"}
+            node.object.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
+            node.object.metaconf["inline"] = {"t":"float", "default":0., "minval":0.}
+            node.object.metaconf["samples"] = {"t":"str"}
+            #node.object.metaconf["t1"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
+            #node.object.metaconf["r1"] = {"t":"float", "minval":0.}
+            #node.object.metaconf["beta"] = {"t":"float", "default":None, "above":0.}
+            #node.object.metaconf["t2"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
+            #node.object.metaconf["r2"] = {"t":"float", "minval":0.}
+            #node.object.metaconf["t3"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
+            #node.object.metaconf["r3"] = {"t":"float", "minval":0.}
+        node.object.metaconf["type"] = {"t":"str", "default":"thermometer"}
     else:
         node.object = Dummy(hal,node)
 

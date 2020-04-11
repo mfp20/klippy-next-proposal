@@ -5,7 +5,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import greenlet, Queue, os, select, math, time
-import chelper, util
+import part, chelper, util
 
 _NOW = 0.
 _NEVER = 9999999999999999.
@@ -90,12 +90,11 @@ class ReactorMutex:
         self.next_pending = True
         self.reactor.update_timer(self.queue[0].timer, self.reactor.NOW)
 
-class Select:
+class Select(part.Object):
     NOW = _NOW
     NEVER = _NEVER
     def __init__(self, hal, node):
-        self.hal = hal
-        self.node = node
+        part.Object.__init__(self,hal,node)
         # Main code
         self._process = False
         self.monotonic = chelper.get_ffi()[1].get_monotonic

@@ -13,7 +13,7 @@ import re, logging, math, zlib, collections
 from messaging import msg
 from messaging import Kerr as error
 import part, composite, chelper, serialhdl, timing
-from parts.endstop import MCU_endstop
+from parts.sensors.endstop import MCU_endstop
 
 ######################################################################
 # Pins
@@ -127,17 +127,14 @@ Beagleboneblack_mappings = {
     'P9_38': 'AIN3', 'P9_39': 'AIN0', 'P9_40': 'AIN1',
 }
 
-# regex to resolve aliases to pins in commands
-re_pin = re.compile(r'(?P<prefix>[ _]pin=)(?P<name>[^ ]*)')
-
 # manages pins on a single board (mcu)
 class Pins:
     def __init__(self, hal, boardnode, validate_aliases=True):
         self.hal = hal
-        self._name = boardnode.get_id()
+        self._name = boardnode.id()
         self.validate_aliases = validate_aliases
         # all pins
-        self.name = list()
+        self.id = list()
         self.alias = list()
         self.function = list()
         self.pull = list()
@@ -146,17 +143,17 @@ class Pins:
         self.reserved = {}
         # pins in config file, activated on connect
         self.active = {}
-    def init(self, mcu, mapping):
+    def map(self, mcu, mapping):
         if mapping == "arduino":
             # grab raw data
             if mcu not in Arduino_mcu_mappings:
                 raise error("Arduino aliases not supported on mcu '%s'" % (mcu,))
             dpins, apins = Arduino_mcu_mappings[mcu]
             for i in range(len(dpins)):
-                self.name.append(str(dpins[i]))
+                self.id.append(str(dpins[i]))
                 self.alias.append('d' + str(i))
             for i in range(len(apins)):
-                self.name.append(str(apins[i]))
+                self.id.append(str(apins[i]))
                 self.alias.append('a%d' % (i,))
             for i in range(len(self.alias)):
                 self.function.append(None)
@@ -165,48 +162,52 @@ class Pins:
         elif mapping == "beaglebone":
             if mcu != 'pru':
                 raise error("Beaglebone aliases not supported on mcu '%s'" % (mcu,))
-            self.name = Beagleboneblack_mappings.values()
+            self.id = Beagleboneblack_mappings.values()
             self.alias = beagleboneblack_mappings.keys()
-            for i in range(len(self.name)):
+            for i in range(len(self.id)):
                 self.function.append(None)
                 self.pull.append(None)
                 self.invert.append(None)
         else:
             raise error("Unknown pin alias mapping '%s'" % (mapping,))
-    def isname(self, txt):
-        if txt in self.name:
+    # bools
+    def isid(self, txt):
+        if txt in self.id:
             return True
         return False
     def isalias(self, txt):
         if txt in self.alias:
             return True
         return False
-    def name2index(self, name):
-        return self.name.index(name)
+    # conversion
+    def id2index(self, name):
+        return self.id.index(name)
     def alias2index(self, alias):
         return self.alias.index(alias)
     def function2index(self, function):
         return self.function.index(function)
-    def name2alias(self, name):
-        return self.alias[self.name.index(name)]
-    def name2function(self, name):
-        return self.function[self.name.index(name)]
-    def alias2name(self, alias):
-        return self.name[self.alias.index(alias)]
+    def id2alias(self, name):
+        return self.alias[self.id.index(name)]
+    def id2function(self, name):
+        return self.function[self.id.index(name)]
+    def alias2id(self, alias):
+        return self.id[self.alias.index(alias)]
     def alias2function(self, alias):
         return self.function[self.alias.index(alias)]
-    def function2name(self, function):
-        return self.name[self.function.index(function)]
+    def function2id(self, function):
+        return self.id[self.function.index(function)]
     def function2alias(self, function):
         return self.alias[self.function.index(function)]
+    # name to alias and back
     def alt(self, txt):
-        if self.isname(txt):
-            return name2alias(txt)
+        if self.isid(txt):
+            return id2alias(txt)
         if self.isalias(txt): 
-            return alias2name(txt)
+            return alias2id(txt)
         return None
-    def set_name(self, index, name):
-        self.name[index] = name
+    # setters
+    def set_id(self, index, name):
+        self.id[index] = name
     def set_alias(self, index, alias):
         self.alias[index] = alias
     def set_function(self, index, function):
@@ -216,33 +217,58 @@ class Pins:
     def set_invert(self, index, invert):
         self.alias[index] = invert
     def set_vector(self, index, vector):
-        self.name[index] = vector[0]
+        self.id[index] = vector[0]
         self.alias[index] = vector[1]
         self.function[index] = vector[2]
         self.pull[index] = vector[3]
         self.invert[index] = vector[4]
+    def set_vector(self, index, name, alias, function, pull, invert):
+        self.set_vector(index, [name, alias, function, pull, invert])
     def set_vector_byname(self, name, vector):
-        self.set_vector(self.name.index(name),vector)
+        self.set_vector(self.id.index(name),vector)
     def set_vector_byalias(self, alias, vector):
         self.set_vector(self.alias.index(alias),vector)
-    def matrix(self, index = None):
+    def fill_vector(self, index = None, name = None, alias = None, function = None, pull = None, invert = None):
+        # identify
         if index:
-            return [self.name[i], self.alias[i], self.function[i], self.pull[i], self.invert[i]]
+            pass
+        elif name:
+            index = id2index(name)
+        elif alias:
+            index = alias2index(name)
+        else:
+            raise error("Unknown pin '%s' (%s), index %s", name, alias, index)
+        # fill
+        if name:
+            self.id[index] = name
+        if alias:
+            self.alias[index] = alias
+        if function:
+            self.function[index] = function
+        if pull:
+            self.pull[index] = pull
+        if invert:
+            self.invert[index] = invert
+    # getters
+    def get_vector(self, i):
+        return [self.id[i], self.alias[i], self.function[i], self.pull[i], self.invert[i]]
+    def get_vector_byname(self, name):
+        return self.get_vector(self.id.index(name))
+    def get_vector_byalias(self, alias):
+        return self.get_vector(self.alias.index(alias))
+    def get_matrix(self, index = None):
+        if index:
+            return self.vector(index)
         else:
             matrix = list()
-            for i in range(len(self.name)):
-                matrix.append([self.name[i], self.alias[i], self.function[i], self.pull[i], self.invert[i]])
+            for i in range(len(self.id)):
+                matrix.append(self.get_vector(i))
             return matrix
-    def vector(self, index):
-        return get_matrix(index)
-    def vector_byname(self, name):
-        return self.get_vector(self.name.index(name))
-    def vector_byalias(self, alias):
-        return self.get_vector(self.alias.index(alias))
+    # adcs
     def adc_register(self, name, adc):
         # TODO check
         if self.isname(name):
-            self.function[self.name2index(name)] = adc
+            self.function[self.id2index(name)] = adc
         elif self.isalias(name):
             self.function[self.alias2index(name)] = adc
         else:
@@ -250,7 +276,7 @@ class Pins:
     def adc_query(self, name):
         # TODO check
         if self.isname(name):
-            value, timestamp = self.name2function(name).get_last_value()        
+            value, timestamp = self.id2function(name).get_last_value()        
         elif self.isalias(name):
             value, timestamp = self.alias2function(name).get_last_value()        
         else:
@@ -258,60 +284,10 @@ class Pins:
         return (name, value, timestamp)
 
 #
-# Virtual pin that propagates its changes to multiple output pins
-#
-# TODO
-class MultiPin:
-    def __init__(self, config):
-        self.printer = config.get_printer()
-        ppins = self.printer.lookup_object('pins')
-        try:
-            ppins.register_chip('multi_pin', self)
-        except ppins.error:
-            pass
-        self.pin_type = None
-        self.pin_list = [pin.strip() for pin in config.get('pins').split(',')]
-        self.mcu_pins = []
-    def setup_pin(self, pin_type, pin_params):
-        ppins = self.printer.lookup_object('pins')
-        pin_name = pin_params['pin']
-        pin = self.printer.lookup_object('multi_pin ' + pin_name, None)
-        if pin is not self:
-            if pin is None:
-                raise ppins.error("multi_pin %s not configured" % (pin_name,))
-            return pin.setup_pin(pin_type, pin_params)
-        if self.pin_type is not None:
-            raise ppins.error("Can't setup multi_pin %s twice" % (pin_name,))
-        self.pin_type = pin_type
-        invert = ""
-        if pin_params['invert']:
-            invert = "!"
-        self.mcu_pins = [ppins.setup_pin(pin_type, invert + pin_desc)
-                         for pin_desc in self.pin_list]
-        return self
-    def get_mcu(self):
-        return self.mcu_pins[0].get_mcu()
-    def setup_max_duration(self, max_duration):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_max_duration(max_duration)
-    def setup_start_value(self, start_value, shutdown_value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_start_value(start_value, shutdown_value)
-    def setup_cycle_time(self, cycle_time, hardware_pwm=False):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
-    def set_digital(self, print_time, value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.set_digital(print_time, value)
-    def set_pwm(self, print_time, value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.set_pwm(print_time, value)
-
-#
 # Support for custom board pin aliases
 #
 # TODO
-class CustomAliases:
+class PinAliasCustom:
     def __init__(self, config, chip_name):
         ppins = config.get_printer().lookup_object('pins')
         pin_resolver = ppins.get_pin_resolver(chip_name)
@@ -383,6 +359,54 @@ class MCU_pin_out:
             self.mcu_pin.set_digital(print_time, value)
         self.last_value = value
         self.last_value_time = print_time
+
+#
+# Virtual pin that propagates its changes to multiple output pins
+#
+# TODO
+class MCU_pin_out_virtual:
+    def __init__(self, hal, name, pins):
+        self.hal = hal
+        try:
+            hal.get_controller().register_chip("multi_pin", self)
+        except error:
+            pass
+        self.pin_type = None
+        self.pin_list = [pin.strip() for pin in config.get("pins").split(',')]
+        self.mcu_pins = []
+    def setup_pin(self, pin_type, pin_params):
+        pin_name = pin_params["pin"]
+        pin = self.printer.lookup_object("multi_pin " + pin_name, None)
+        if pin is not self:
+            if pin is None:
+                raise error("multi_pin %s not configured" % (pin_name,))
+            return pin.setup_pin(pin_type, pin_params)
+        if self.pin_type is not None:
+            raise ppins.error("Can't setup multi_pin %s twice" % (pin_name,))
+        self.pin_type = pin_type
+        invert = ""
+        if pin_params["invert"]:
+            invert = "!"
+        self.mcu_pins = [ppins.setup_pin(pin_type, invert + pin_desc)
+                         for pin_desc in self.pin_list]
+        return self
+    def get_mcu(self):
+        return self.mcu_pins[0].get_mcu()
+    def setup_max_duration(self, max_duration):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_max_duration(max_duration)
+    def setup_start_value(self, start_value, shutdown_value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_start_value(start_value, shutdown_value)
+    def setup_cycle_time(self, cycle_time, hardware_pwm=False):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
+    def set_digital(self, print_time, value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.set_digital(print_time, value)
+    def set_pwm(self, print_time, value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.set_pwm(print_time, value)
 
 #
 # Set the state of a list of digital output pins
@@ -760,27 +784,35 @@ class CommandWrapper:
         self._serial.raw_send(cmd, minclock, reqclock, self._cmd_queue)
 
 class MCU:
-    def __init__(self, hal, boardnode, clocksync):
+    # regex to resolve aliases to pins in commands
+    re_pin = re.compile(r'(?P<prefix>[ _]pin=)(?P<name>[^ ]*)')
+    def __init__(self, hal, board, name, clocksync):
         self.hal = hal
-        self._name = boardnode.get_id()
-        self._board = boardnode.object
+        self._board = board
+        self._name = name
         self._clocksync = clocksync
+        #
         self._reactor = self.hal.get_reactor()
+        # TODO bug each mcu must register a different handler!!!!
         self.hal.get_printer().register_event_handler("klippy:connect", self._connect)
         self.hal.get_printer().register_event_handler("klippy:mcu_identify", self._mcu_identify)
         self.hal.get_printer().register_event_handler("klippy:shutdown", self._shutdown)
         self.hal.get_printer().register_event_handler("klippy:disconnect", self._disconnect)
         # Serial port
-        self._serialport = boardnode.attr_get("serial", False, "/dev/ttyS0")
+        self._serialport = self._board._serialport
+        serial_rts = True
+        if self._board._restart_method == "cheetah":
+            # Special case: Cheetah boards require RTS to be deasserted, else
+            # a reset will trigger the built-in bootloader.
+            serial_rts = False
         baud = 0
         if not (self._serialport.startswith("/dev/rpmsg_") or self._serialport.startswith("/tmp/klipper_host_")):
-            baud = boardnode.attr_get_int("baud", 2400, maxval=250000, default=250000)
-        self._serial = serialhdl.SerialReader(self._reactor, self._serialport, baud)
+            baud = self._board._baud
+        self._serial = serialhdl.SerialReader(self._reactor, self._serialport, baud, serial_rts)
         # Restarts
         self._restart_method = "command"
         if baud:
-            rmethods = {m: m for m in [None, "arduino", "command", "rpi_usb"]}
-            self._restart_method = boardnode.attr_get_choice("restart_method", rmethods, None)
+            self._restart_method = self._board._restart_method
         self._reset_cmd = self._config_reset_cmd = None
         self._emergency_stop_cmd = None
         self._is_shutdown = self._is_timeout = False
@@ -790,12 +822,12 @@ class MCU:
         self._config_callbacks = []
         self._init_cmds = []
         self._config_cmds = []
-        self._pin_map = boardnode.attr_get("pin_map")
-        self._custom = boardnode.attr_get("custom")
+        self._pin_map = self._board._pin_map
+        self._custom = self._board._custom
         self._mcu_freq = 0.
         # Move command queuing
         ffi_main, self._ffi_lib = chelper.get_ffi()
-        self._max_stepper_error = boardnode.attr_get_float("max_stepper_error", minval=0., default=0.000025)
+        self._max_stepper_error = self._board._max_stepper_error
         self._stepqueues = []
         self._steppersync = None
         # Stats
@@ -866,7 +898,7 @@ class MCU:
         def pin_fixup(m):
             name = m.group('name')
             if name in self._board.pin.alias:
-                pin_id = self._board.pin.alias2name(name)
+                pin_id = self._board.pin.alias2id(name)
                 pin_params = self._board.pin.active.pop(name)
                 pin_params["pin"] = pin_id
                 self._board.pin.active[pin_id] = pin_params
@@ -878,7 +910,7 @@ class MCU:
             if pin_id in self._board.pin.reserved:
                 raise error("pin %s is reserved for %s" % (name, self._board.pin.reserved[pin_id]))
             return m.group('prefix') + str(pin_id)
-        return re_pin.sub(pin_fixup, cmd)
+        return self.re_pin.sub(pin_fixup, cmd)
     #
     def _send_config(self, prev_crc):
         # Build config commands
@@ -896,7 +928,7 @@ class MCU:
         self.add_config_cmd("finalize_config crc=%d" % (config_crc,))
         # Transmit config messages (if needed)
         if prev_crc is None:
-            logging.info("Sending MCU '%s' printer configuration...",
+            logging.info("- Sending printer configuration to MCU '%s'.",
                          self._name)
             for c in self._config_cmds:
                 self._serial.send(c)
@@ -1059,6 +1091,10 @@ class MCU:
         logging.info("Attempting MCU '%s' reset", self._name)
         self._disconnect()
         serialhdl.arduino_reset(self._serialport, self._reactor)
+    def _restart_cheetah(self):
+        logging.info("Attempting MCU '%s' Cheetah-style reset", self._name)
+        self._disconnect()
+        serialhdl.cheetah_reset(self._serialport, self._reactor)
     def _restart_via_command(self):
         if ((self._reset_cmd is None and self._config_reset_cmd is None)
             or not self._clocksync.is_active()):
@@ -1088,6 +1124,8 @@ class MCU:
             self._restart_rpi_usb()
         elif self._restart_method == 'command':
             self._restart_via_command()
+        elif self._restart_method == 'cheetah':
+            self._restart_cheetah()
         else:
             self._restart_arduino()
     # Misc external commands
@@ -1124,41 +1162,46 @@ class MCU:
 # Board := {mcu, pins, uart, i2c, spi, ...}
 ######################################################################
 
-ATTRS = ("serial", "baud", "pin_map", "restart_method")
-
 # TODO
 class Dummy(part.Object):
     def __init__(self, hal, node):
         part.Object.__init__(self,hal,node)
-        logging.warning("(%s) controller.Dummy (dummy Board)", self.node.name)
+        logging.warning("(%s) controller.Dummy (dummy Board)", self.get_name())
         self.ready = True
     def register(self):
         pass
 
 class Board(part.Object):
+    rmethods = [None, "arduino", "cheetah", "command", "rpi_usb"]
     def __init__(self, hal, node):
         part.Object.__init__(self,hal,node)
-        self.pin = Pins(self.hal, self.node)
+        self.metaconf["serialport"] = {"t": "str", "default": "/dev/ttyS0"}
+        self.metaconf["baud"] = {"t": "int", "default":250000, "minval":2400, "maxval":250000}
+        self.metaconf["restart_method"] = {"t": "choice", "choices":self.rmethods, "default":None}
+        self.metaconf["pin_map"] = {"t": "str", "default":None}
+        self.metaconf["custom"] = {"t": "str", "default":""}
+        self.metaconf["max_stepper_error"] = {"t": "float", "minval":0., "default":0.000025}
+        #
+        self.pin = Pins(self.hal, node)
         self.uart = collections.OrderedDict()
         self.i2c = collections.OrderedDict()
         self.spi = collections.OrderedDict()
-    def init(self):
-        # mcu
+    def init_mcu(self):
         if self.hal.mcu_count == 0:
-            self.mcu = MCU(self.hal, self.node, self.hal.get_timing())
+            self.mcu = MCU(self.hal, self, self.id(), self.hal.get_timing())
         else:
-            self.mcu = MCU(self.hal, self.node, timing.Secondary(self.hal.get_reactor(), self.hal.get_timing()))
+            self.mcu = MCU(self.hal, self, self.id(), timing.Secondary(self.hal, self.hal.get_reactor(), self.hal.get_timing()))
         self.hal.mcu_count = self.hal.mcu_count + 1
         self.ready = True
     def register(self):
-        self.hal.get_printer().register_event_handler("board:"+self.node.get_id()+":identified", self._identified)
-        self.hal.get_printer().register_event_handler("board:"+self.node.get_id()+":configured", self._configured)
+        self.hal.get_printer().register_event_handler("board:"+self.id()+":identified", self._identified)
+        self.hal.get_printer().register_event_handler("board:"+self.id()+":configured", self._configured)
     # events handlers
     def _identified(self, mcuname):
         # init pins
-        self.mcu._mcu_type = self.mcu._serial.get_msgparser().get_constant('MCU')
-        self.pin.init(self.mcu._mcu_type, self.mcu._pin_map)
-        # parse constants (ex: )
+        self.mcu._mcu_type = self.mcu._serial.get_msgparser().get_constant("MCU")
+        self.pin.map(self.mcu._mcu_type, self.mcu._pin_map)
+        # parse constants
         for cname, value in self.mcu.get_constants().items():
             # ex: RESERVE_PINS_serial
             if cname.startswith("RESERVE_PINS_"):
@@ -1167,15 +1210,15 @@ class Board(part.Object):
         # TODO
         # get uart
         # get available i2c
-        #enumerations = self.hal.get_node("mcu "+self.node.get_id()).object.mcu.get_enumerations()
+        #enumerations = self.hal.get_node("mcu "+self.id()).object.mcu.get_enumerations()
         #i2c = enumerations.get("i2c_bus", enumerations.get('bus'))
         #for i in i2c:
-        #    self.bus_reserve()
+        #    self.bus_pin_reserve()
         #    self.bus_setup_i2c()
         # get available spi
         #spi = enumerations.get("spi_bus", enumerations.get('bus'))
         #for s in spi:
-        #    self.bus_reserve()
+        #    self.bus_pin_reserve()
         #    self.bus_setup_spi()
     def _configured(self):
         self.hal.get_printer().send_event("controller:ready")
@@ -1200,7 +1243,7 @@ class Board(part.Object):
             raise error("Invalid pin description '%s'\nFormat is: %s[chip_name:] pin_name" % (pin_desc, format))
         pin_params = {'chip': self.mcu, 'chip_name': self.mcu._name, 'pin': desc, 'invert': invert, 'pullup': pullup}
         return pin_params
-    def pin_activate(self, pin_desc, can_invert=False, can_pullup=False, share_type=None):
+    def pin_register(self, pin_desc, can_invert=False, can_pullup=False, share_type=None):
         pin_params = self.pin_parse(pin_desc, can_invert, can_pullup)
         pin = pin_params['pin']
         share_name = pin
@@ -1217,7 +1260,7 @@ class Board(part.Object):
     def pin_setup(self, pin_type, pin_desc):
         can_invert = pin_type in ['endstop', 'digital_out', 'pwm']
         can_pullup = pin_type in ['endstop']
-        pin_params = self.pin_activate(pin_desc, can_invert, can_pullup)
+        pin_params = self.pin_register(pin_desc, can_invert, can_pullup)
         return pin_params['chip'].setup_pin(pin_type, pin_params)
     def pin_reserve(self, name, function):
         if name in self.pin.reserved and self.pin.reserved[name] != function:
@@ -1226,7 +1269,7 @@ class Board(part.Object):
     def pin_reset_sharing(self, pin_params):
         share_name = "%s" % (pin_params['chip_name'], pin_params['pin'])
         del self.pin.active[share_name]
-    def bus_reserve(self, bus):
+    def bus_pin_reserve(self, bus):
         reserve_pins = self.mcu.get_constants().get('BUS_PINS_%s' % (bus,), None)
         if reserve_pins is not None:
             for pin in reserve_pins.split(','):
@@ -1234,17 +1277,17 @@ class Board(part.Object):
     def bus_setup_i2c(self, busname = 0, default_speed = 100000, default_addr = None):
         # TODO
         # Load bus parameters
-        bus = self.node.attr_get("i2c_bus", default=busname)
-        speed = self.node.attr_get_int("i2c_speed", default=default_speed, minval=100000)
+        bus = self.conf_get("i2c_bus", default=busname)
+        speed = self.conf_get_int("i2c_speed", default=default_speed, minval=100000)
         if default_addr is None:
-            addr = self.node.attr_get_int("i2c_address", minval=0, maxval=127)
+            addr = self.conf_get_int("i2c_address", minval=0, maxval=127)
         else:
-            addr = self.node.attr_get_int("i2c_address", default=default_addr, minval=0, maxval=127)
+            addr = self.conf_get_int("i2c_address", default=default_addr, minval=0, maxval=127)
         # create i2c
         self.i2c[bus] = MCU_i2c(self.mcu, bus, addr, speed)
     def bus_setup_spi(self, mode, busname = 0, pin_option="cs_pin", default_speed=100000):
         # TODO
-        cs_pin = self.node.attr_get(pin_option)
+        cs_pin = self.conf_get(pin_option)
         cs_pin_params = self.hal.get_controller().get_pin(cs_pin)
         pin = cs_pin_params["pin"]
         if pin == "None":
@@ -1252,17 +1295,17 @@ class Board(part.Object):
             pin = None
         # Load bus parameters
         mcu = cs_pin_params["chip"]
-        speed = self.node.attr_get_int("spi_speed", default=default_speed, minval=100000, maxval=4000000)
-        if self.node.attr_get("spi_software_sclk_pin", None) is not None:
+        speed = self.conf_get_int("spi_speed", default=default_speed, minval=100000, maxval=4000000)
+        if self.conf_get("spi_software_sclk_pin", None) is not None:
             sw_pin_names = ["spi_software_%s_pin" % (name,) for name in ["miso", "mosi", "sclk"]]
             sw_pin_params = [self.hal.get_controller().get_pin(self.hal.attr_get(name), share_type=name) for name in sw_pin_names]
             for pin_params in sw_pin_params:
                 if pin_params["chip"] != mcu:
-                    raise error("%s: spi pins must be on same mcu" % (self.node.name,))
+                    raise error("%s: spi pins must be on same mcu" % (self.get_name(),))
             sw_pins = tuple([pin_params["pin"] for pin_params in sw_pin_params])
             bus = None
         else:
-            bus = self.node.attr_get("spi_bus", default=None)
+            bus = self.conf_get("spi_bus", default=None)
             sw_pins = None
         # create spi
         self.spi[bus] = MCU_spi(self.mcu, bus, pin, mode, speed, sw_pins)
@@ -1276,6 +1319,14 @@ class Object(composite.Object):
         composite.Object.__init__(self,hal,node)
         self.board = {}
         self.board_ready = 0
+        self.endstop = {}
+        self.thermometer = {}
+        self.hygrometer = {}
+        self.barometer = {}
+        self.filament = {}
+        self.stepper = {}
+        self.heater = {}
+        self.cooler = {}
         self.ready = True
     def register(self):
         self.hal.get_printer().register_event_handler("controller:ready", self._ready)
@@ -1284,21 +1335,48 @@ class Object(composite.Object):
         self.hal.get_commander().register_command("SHOW_ADC_VALUE", self.cmd_SHOW_ADC_VALUE, desc=self.cmd_SHOW_ADC_VALUE_help)
         self.hal.get_commander().register_command("SHOW_ENDSTOPS", self.cmd_SHOW_ENDSTOPS, desc=self.cmd_SHOW_ENDSTOPS_help)
         #gcode.register_command("M119", self.cmd_SHOW_ENDSTOPS)
-    def register_board(self, bnode, dummy = False):
-        bname = bnode.get_id()
-        if bname in self.board:
-            raise error("Duplicate mcu name '%s'" % bname)
-        if dummy:
-            self.board[bname] = bnode.object = Dummy(self.hal, bnode)
+    # (un)register parts
+    def register_part(self, node, remove = False):
+        if remove:
+            # delete
+            for parts in [self.board, self.endstop, self.thermometer, self.hygrometer, self.barometer, self.filament, self.stepper, self.heater, self.cooler]:
+                if node.name in parts:
+                    parts.pop(node.name)
+                    return
+            logging.warning("Part '%s' not registered in controller. Can't de-register.", node.name)
         else:
-            self.board[bname] = bnode.object = Board(self.hal, bnode)
-            self.board[bname].init()
-    # events handler
+            # register
+            if node.name.startswith("mcu "):
+                bname = node.id()
+                if bname in self.board:
+                    raise error("Duplicate mcu name '%s'" % bname)
+                self.board[bname] = node.object = Board(self.hal, node)
+                node.attrs2obj()
+                self.board[bname].init_mcu()
+            elif node.name.startswith("sensor "):
+                if node.attr("type") == "endstop":
+                    self.endstop[node.name] = node.object
+                if node.attr("type") == "thermometer":
+                    self.thermometer[node.name] = node.object
+                if node.attr("type") == "hygrometer":
+                    self.hygrometer[node.name] = node.object
+                if node.attr("type") == "barometer":
+                    self.barometer[node.name] = node.object
+                if node.attr("type") == "filament":
+                    self.filament[node.name] = node.object
+            elif node.name.startswith("stepper "):
+                self.stepper[node.name] = node.object
+            elif node.name.startswith("heater "):
+                self.heater[node.name] = node.object
+            elif node.name.startswith("cooler "):
+                self.cooler[node.name] = node.object
+            else:
+                raise error("Unknown group for part '%s'. Can't register in controller.", name)
+    # events handlers
     def _ready(self):
         self.board_ready = self.board_ready + 1
         if self.board_ready == self.hal.mcu_count:
-            #logging.debug("* Printer Controller connected to MCU(s).")
-            logging.debug(self.hal.show())
+            self.hal.ready()
         elif self.board_ready > self.hal.mcu_count:
             raise error("Controller: too many ready MCUs.")
     #
@@ -1310,7 +1388,7 @@ class Object(composite.Object):
     def pin_register(self, pin_desc, can_invert=False, can_pullup=False, share_type=None):
         bname = pin_desc.split(":")[0]
         pname = pin_desc.split(":")[1]
-        return self.board[bname].pin_activate(pname, can_invert, can_pullup, share_type)
+        return self.board[bname].pin_register(pname, can_invert, can_pullup, share_type)
     def pin_setup(self, pin_type, pin_desc):
         bname = pin_desc.split(":")[0]
         pname = pin_desc.split(":")[1]
@@ -1320,6 +1398,7 @@ class Object(composite.Object):
         for b in self.board:
             pins[b] = self.board[b].pin.matrix()
         return pins
+    # commands handlers
     cmd_SHOW_PINS_ALL_help = "Shows all pins."
     def cmd_SHOW_PINS_ALL(self):
         self.hal.get_gcode().respond_info(self.pin_matrix(), log=False)
@@ -1359,13 +1438,13 @@ class Object(composite.Object):
         #
         self.hal.get_gcode().respond(msg)
 
-
+ATTRS = ("serialport", "baud", "pin_map", "restart_method")
 def load_node_object(hal, node):
     if node.name == "controller":
         node.object = Object(hal, node)
     elif node.name.startswith("mcu "):
         if node.attrs_check():
-            hal.get_controller().register_board(node)
+            hal.get_controller().register_part(node)
         else:
-            hal.get_controller().register_board(node, True)
+            node.object = Dummy(hal, node)
 

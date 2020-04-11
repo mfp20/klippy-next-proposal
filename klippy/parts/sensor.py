@@ -7,5 +7,10 @@
 import part
 
 class Object(part.Object):
-    pass
-
+    def __init__(self,hal,node):
+        part.Object.__init__(self, hal, node)
+        self.metaconf["type"] = {"t":"str"}
+        # min operating temperature #TODO move in a better location, so that EVERY part have one of those
+        self.metaconf["temp_min"] = {"t":"float", "default":-273.0}
+        # max operating temperature
+        self.metaconf["temp_max"] = {"t":"float", "default":400.0}

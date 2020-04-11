@@ -12,30 +12,27 @@
 import logging, re, collections, os
 from messaging import msg
 from messaging import Kerr as error
+import part
 
 class sentinel:
     pass
 
-class Object():
+class Object(part.Object):
+    respond_types = { 'echo': 'echo:', 'command': '//', 'error' : '!!'}
     object_command = ["UNKNOWN", "IGNORE", "ECHO"]
-    respond_types = {
-        'echo': 'echo:',
-        'command': '//',
-        'error' : '!!',
-    }
     extended_r = re.compile(
         r'^\s*(?:N[0-9]+\s*)?'
         r'(?P<cmd>[a-zA-Z_][a-zA-Z0-9_]+)(?:\s+|$)'
         r'(?P<args>[^#*;]*?)'
         r'\s*(?:[#*;].*)?$')
     def __init__(self, hal, node):
-        self.hal = hal
-        self.node = node
+        part.Object.__init__(self,hal,node)
+        self.metaconf["default_type"] = {"t": "choice", "choices": self.respond_types, "default": "echo"}
+        self.metaconf["default_prefix"] = {"t": "str", "default": "self._default_type"}
+        #
         self.printer = self.hal.tree.printer.object
         self.reactor = self.hal.get_reactor()
         self.mutex = self.reactor.mutex()
-        self.default_prefix = self.node.attr_get_choice("default_type", choices=self.respond_types, default="echo")
-        self.default_prefix = self.node.attr_get("default_prefix", default=self.default_prefix)
         # input handling
         self.input_log = collections.deque([], 50)
         # command handling
@@ -180,6 +177,7 @@ class Dispatch(Object):
     m112_r = re.compile('^(?:[nN][0-9]+)?\s*[mM]112(?:\s|$)')
     def __init__(self, hal, node):
         Object.__init__(self, hal, node)
+        #
         self.fd = self.printer.input_fd
         # input handling
         self.is_processing_data = False
@@ -797,7 +795,7 @@ class Gcode(Object):
 
 def load_node_object(hal, node):
     node.object = Gcode(hal, node)
-    hal.get_commander().register_commander("gcode "+node.get_id(), node.object)
+    hal.get_commander().register_commander("gcode "+node.id(), node.object)
 
 # TODO
 # Adds support fro ARC commands via G2/G3

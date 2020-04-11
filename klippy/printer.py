@@ -10,120 +10,7 @@ from messaging import msg
 from messaging import Kerr as error
 import configfile, hw, tree, homing, msgproto
 
-class Composer:
-    def __init__(self, config, hal):
-        self.hal = hal
-        logging.info("- Composing printer tree.")
-        self.pgroups = hal.pgroups
-        self.cgroups = hal.cgroups
-        partnames_to_remove = set()
-        # read parts
-        parts = collections.OrderedDict()
-        for p in self.pgroups:
-            for s in config.get_prefix_sections(p+" "):
-                part = tree.PrinterNode(s.get_name())
-                for k in s.fileconfig.options(s.get_name()):
-                    for a in s.get(k).split(","):
-                        part.attr_set(k, a)
-                if p == "mcu":
-                    part.module = importlib.import_module("controller")
-                elif p == "sensor":
-                    part.module = importlib.import_module("parts."+config.getsection(s.get_name()).get("type"))
-                else:
-                    part.module = importlib.import_module("parts." + p)
-                parts[part.name] = part
-        # read plugins
-        for m in config.get_prefix_extra_sections(self.pgroups+self.cgroups):
-            part = tree.PrinterNode(m.get_name())
-            for k in m.fileconfig.options(m.get_name()):
-                part.attrs[k] = m.get(k)
-            part.module = config.get_printer().try_load_module(config, m.get_name())
-            if part.module:
-                parts[part.name] = part
-        # assemble composites
-        composites = collections.OrderedDict()
-        for p in self.cgroups:
-            for s in config.get_prefix_sections(p+" "):
-                c = self.compose(tree.PrinterNode(s.get_name()), config, parts, composites)
-                if p == "rail" or p == "cart":
-                    c.module = importlib.import_module("parts."+p)
-                elif p == "tool":
-                    c.module = importlib.import_module("parts."+config.getsection(s.get_name()).get("type"))
-                composites[s.get_name()] = c
-        # dump spare composites in parts
-        for c in composites:
-            parts[c] = composites[c]
-        del(composites)
-        # build tree: basic modules and parts
-        hal.get_node("printer").child_set(tree.PrinterNode("commander"))
-        hal.get_node("printer").child_set(tree.PrinterNode("controller"))
-        hal.get_node("controller").child_set(tree.PrinterNode("timing"))
-        hal.get_node("controller").child_set(tree.PrinterNode("temperature"))
-        for n in ["reactor", "commander", "controller", "timing", "temperature"]:
-            hal.get_node(n).module = importlib.import_module(n)
-        # adding parts and composites nodes.
-        for a in config.getsection("printer").fileconfig.options("printer"):
-            if a in self.pgroups or a in self.cgroups:
-                if a == "mcu":
-                    for n in config.getsection("printer").get(a).split(","):
-                        hal.get_node("controller").children[a+" "+n] = parts.pop(a+" "+n)
-                else:
-                    for n in config.getsection("printer").get(a).split(","):
-                        hal.tree.printer.children[a+" "+n] = parts.pop(a+" "+n)
-            elif a == "toolhead":
-                for n in config.getsection("printer").get(a).split(","):
-                    partnames_to_remove = partnames_to_remove.union(self.compose_toolhead(config.get_prefix_sections(a+" "+n)[0], parts))
-            else:
-                hal.tree.printer.attrs[a] = config.get(a)
-        # adding plugins nodes
-        for m in config.get_prefix_extra_sections(self.pgroups+self.cgroups):
-            if m.get_name() in parts:
-                partnames_to_remove = partnames_to_remove.union(parts[m.get_name()].module.load_tree_node(hal, parts[m.get_name()], parts))
-        # cleanup
-        for i in partnames_to_remove:
-            if i in parts:
-                parts.pop(i)
-        # save spares
-        for i in parts:
-            hal.tree.spare.children[i] = parts.pop(i)
-    def compose(self, composite, config, parts, composites):
-        section = config.get_prefix_sections(composite.name)
-        for o in config.fileconfig.options(composite.name):
-            if o in self.pgroups:
-                for p in section[0].get(o).split(","):
-                    if p != "none":
-                        if o+" "+p in parts:
-                            composite.child_set(parts.pop(o+" "+p))
-            elif o == "sensor_min" or o == "sensor_max" or o == "sensor_level":
-                for p in section[0].get(o).split(","):
-                    if "sensor "+p in parts:
-                        composite.child_set(parts.pop("sensor "+p))
-                    composite.attr_set(o, section[0].get(o))
-            elif o not in self.cgroups:
-                composite.attr_set(o, section[0].get(o))
-            else:
-                for p in section[0].get(o).split(","):
-                    if p != "none":
-                        if o+" "+p in composites:
-                            composite.child_set(self.compose(composites.pop(o+" "+p), config, parts, composites))
-        return composite
-    def compose_toolhead(self, config, parts):
-        name = config.get_name()
-        knode = tree.PrinterNode("kinematic "+name.split(" ")[1])
-        ktype = config.getsection(name).get("kinematics")
-        knode.attr_set("type", ktype)
-        knode.module = importlib.import_module('kinematics.' + ktype)
-        toolhead = tree.PrinterNode(name)
-        toolhead.module = importlib.import_module("instrument")
-        toolhead.child_set(tree.PrinterNode("gcode "+name.split(" ")[1]))
-        toolhead.children["gcode "+name.split(" ")[1]].module = self.hal.get_node("commander").module
-        for a in config.getsection(name).fileconfig.options(name):
-            toolhead.attrs[a] = config.getsection(name).get(a)
-        knode.child_set(toolhead)
-        return knode.module.load_tree_node(self.hal, knode, parts)
-
 # klippy main app
-
 class Main:
     config_error = configfile.error
     command_error = homing.CommandError
@@ -224,11 +111,11 @@ class Main:
             self.invoke_shutdown("Internal error during ready callback: %s" % (
                 str(e),))
         systime = time.time()
-        logging.info("Init complete at %s (%.1f %.1f)", time.asctime(time.localtime(systime)), time.time(), self.reactor.monotonic())
+        logging.info("* Init complete at %s (%.1f %.1f)", time.asctime(time.localtime(systime)), time.time(), self.reactor.monotonic())
     def run(self):
         systime = time.time()
         monotime = self.reactor.monotonic()
-        logging.info("Init printer at %s (%.1f %.1f)", time.asctime(time.localtime(systime)), systime, monotime)
+        logging.info("* Init printer at %s (%.1f %.1f)", time.asctime(time.localtime(systime)), systime, monotime)
         # Enter main reactor loop
         try:
             self.reactor.run()
@@ -323,4 +210,118 @@ class Main:
             raise gcode.error(message)
         # Request a restart
         gcode.request_restart('restart')
+
+# tree and parts composer
+class Composer:
+    def __init__(self, config, hal):
+        self.hal = hal
+        logging.info("- Composing printer tree.")
+        self.pgroups = hal.pgroups
+        self.cgroups = hal.cgroups
+        partnames_to_remove = set()
+        # read parts
+        parts = collections.OrderedDict()
+        for p in self.pgroups:
+            for s in config.get_prefix_sections(p+" "):
+                part = tree.PrinterNode(s.get_name())
+                for k in s.fileconfig.options(s.get_name()):
+                    for a in s.get(k).split(","):
+                        part.attr_set(k, a)
+                if p == "mcu":
+                    part.module = importlib.import_module("controller")
+                elif p == "sensor":
+                    part.module = importlib.import_module("parts.sensors."+config.getsection(s.get_name()).get("type"))
+                else:
+                    part.module = importlib.import_module("parts." + p)
+                parts[part.name] = part
+        # read plugins
+        for m in config.get_prefix_extra_sections(self.pgroups+self.cgroups):
+            part = tree.PrinterNode(m.get_name())
+            for k in m.fileconfig.options(m.get_name()):
+                part.attrs[k] = m.get(k)
+            part.module = config.get_printer().try_load_module(config, m.get_name())
+            if part.module:
+                parts[part.name] = part
+        # assemble composites
+        composites = collections.OrderedDict()
+        for p in self.cgroups:
+            for s in config.get_prefix_sections(p+" "):
+                c = self.compose(tree.PrinterNode(s.get_name()), config, parts, composites)
+                if p == "rail" or p == "cart":
+                    c.module = importlib.import_module("parts."+p)
+                elif p == "tool":
+                    c.module = importlib.import_module("parts."+config.getsection(s.get_name()).get("type"))
+                composites[s.get_name()] = c
+        # dump spare composites in parts
+        for c in composites:
+            parts[c] = composites[c]
+        del(composites)
+        # build tree: basic modules and parts
+        hal.node("printer").child_set(tree.PrinterNode("commander"))
+        hal.node("printer").child_set(tree.PrinterNode("controller"))
+        hal.node("controller").child_set(tree.PrinterNode("timing"))
+        hal.node("controller").child_set(tree.PrinterNode("temperature"))
+        for n in ["reactor", "commander", "controller", "timing", "temperature"]:
+            hal.node(n).module = importlib.import_module(n)
+        # adding parts and composites nodes.
+        for a in config.getsection("printer").fileconfig.options("printer"):
+            if a in self.pgroups or a in self.cgroups:
+                if a == "mcu":
+                    for n in config.getsection("printer").get(a).split(","):
+                        hal.node("controller").children[a+" "+n] = parts.pop(a+" "+n)
+                else:
+                    for n in config.getsection("printer").get(a).split(","):
+                        hal.tree.printer.children[a+" "+n] = parts.pop(a+" "+n)
+            elif a == "toolhead":
+                for n in config.getsection("printer").get(a).split(","):
+                    partnames_to_remove = partnames_to_remove.union(self.compose_toolhead(config.get_prefix_sections(a+" "+n)[0], parts))
+            else:
+                hal.tree.printer.attrs[a] = config.get(a)
+        # adding plugins nodes
+        for m in config.get_prefix_extra_sections(self.pgroups+self.cgroups):
+            if m.get_name() in parts:
+                partnames_to_remove = partnames_to_remove.union(parts[m.get_name()].module.load_tree_node(hal, parts[m.get_name()], parts))
+        # cleanup
+        for i in partnames_to_remove:
+            if i in parts:
+                parts.pop(i)
+        # save spares
+        for i in parts:
+            hal.tree.spare.children[i] = parts.pop(i)
+    def compose(self, composite, config, parts, composites):
+        section = config.get_prefix_sections(composite.name)
+        for o in config.fileconfig.options(composite.name):
+            if o in self.pgroups:
+                for p in section[0].get(o).split(","):
+                    if p != "none":
+                        if o+" "+p in parts:
+                            composite.child_set(parts.pop(o+" "+p))
+            elif o == "sensor_min" or o == "sensor_max" or o == "sensor_level":
+                for p in section[0].get(o).split(","):
+                    if "sensor "+p in parts:
+                        composite.child_set(parts.pop("sensor "+p))
+                    composite.attr_set(o, section[0].get(o))
+            elif o not in self.cgroups:
+                composite.attr_set(o, section[0].get(o))
+            else:
+                for p in section[0].get(o).split(","):
+                    if p != "none":
+                        if o+" "+p in composites:
+                            composite.child_set(self.compose(composites.pop(o+" "+p), config, parts, composites))
+        return composite
+    def compose_toolhead(self, config, parts):
+        name = config.get_name()
+        knode = tree.PrinterNode("kinematic "+name.split(" ")[1])
+        ktype = config.getsection(name).get("kinematics")
+        knode.attr_set("type", ktype)
+        knode.module = importlib.import_module('kinematics.' + ktype)
+        toolhead = tree.PrinterNode(name)
+        toolhead.module = importlib.import_module("instrument")
+        toolhead.child_set(tree.PrinterNode("gcode "+name.split(" ")[1]))
+        toolhead.children["gcode "+name.split(" ")[1]].module = self.hal.node("commander").module
+        for a in config.getsection(name).fileconfig.options(name):
+            toolhead.attrs[a] = config.getsection(name).get(a)
+        knode.child_set(toolhead)
+        return knode.module.load_tree_node(self.hal, knode, parts)
+
 
