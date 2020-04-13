@@ -36,4 +36,5 @@ def load_node_object(hal, node):
         node.object = Object(hal, node)
     else:
         node.object = Dummy(hal,node)
+    return node.object
 

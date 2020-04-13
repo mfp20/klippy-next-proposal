@@ -579,20 +579,11 @@ class Object(composite.Object):
 
 ATTRS = ("x", "y", "z", "max_velocity", "max_accel", "max_z_velocity", "max_z_accel")
 def load_node_object(hal, node):
-    #logging.debug("LOAD %s", node.name)
-    config_ok = True
-    for a in node.module.ATTRS:
-        if a not in node.attrs:
-            config_ok = False
-            break
-        elif node.attrs[a] == "none":
-            config_ok = False
-            break
-    if config_ok:
+    if node.attrs_check():
         node.object = Object(hal, node)
     else:
         node.object = Dummy(hal, node)
         # force dummy kinematic too
         kin = node.parent(hal.tree.printer, node.name)
         kin.object = DummyKinematic(hal, kin)
-
+    return node.object

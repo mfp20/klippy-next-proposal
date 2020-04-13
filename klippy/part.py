@@ -24,7 +24,7 @@ class Object():
                 self.name = node.name
         else:
             if not hasattr(self, "name"):
-                self.name = "object anonymous"
+                self.name = "anonymous object"
         #
         self.pin = {}
         #

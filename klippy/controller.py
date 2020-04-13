@@ -506,8 +506,8 @@ class MCU_pin_in_adc:
         min_sample = max(0, min(0xffff, int(self._min_sample * max_adc)))
         max_sample = max(0, min(0xffff, int(math.ceil(self._max_sample * max_adc))))
         self._mcu.add_config_cmd("query_analog_in oid=%d clock=%d sample_ticks=%d sample_count=%d rest_ticks=%d min_value=%d max_value=%d range_check_count=%d" % (self._oid, clock, sample_ticks, self._sample_count, self._report_clock, min_sample, max_sample, self._range_check_count), is_init=True)
-        self._mcu.register_response(self._handle_analog_in_state, "analog_in_state", self._oid)
-    def _handle_analog_in_state(self, params):
+        self._mcu.register_response(self._serial_handle_analog_in_state, "analog_in_state", self._oid)
+    def _serial_handle_analog_in_state(self, params):
         last_value = params['value'] * self._inv_max_adc
         next_clock = self._mcu.clock32_to_clock64(params['next_clock'])
         last_read_clock = next_clock - self._report_clock
@@ -713,10 +713,10 @@ class MCU:
         self._clocksync = clocksync
         #
         self._reactor = self.hal.get_reactor()
-        self.hal.get_printer().register_event_handler("klippy:connect", self._connect)
-        self.hal.get_printer().register_event_handler("klippy:mcu_identify", self._mcu_identify)
-        self.hal.get_printer().register_event_handler("klippy:shutdown", self._shutdown)
-        self.hal.get_printer().register_event_handler("klippy:disconnect", self._disconnect)
+        self.hal.get_printer().register_event_handler("klippy:connect", self._event_handle_connect)
+        self.hal.get_printer().register_event_handler("klippy:mcu_identify", self._event_handle_mcu_identify)
+        self.hal.get_printer().register_event_handler("klippy:shutdown", self._event_handle_shutdown)
+        self.hal.get_printer().register_event_handler("klippy:disconnect", self._event_handle_disconnect)
         # Serial port
         self._serialport = self._board._serialport
         serial_rts = True
@@ -754,8 +754,79 @@ class MCU:
         self._mcu_tick_avg = 0.
         self._mcu_tick_stddev = 0.
         self._mcu_tick_awake = 0.
+    # event handlers
+    def _event_handle_connect(self):
+        config_params = self._send_get_config()
+        if not config_params['is_config']:
+            if self._restart_method == 'rpi_usb':
+                # Only configure mcu after usb power reset
+                self._check_restart("full reset before config")
+            # Not configured - send config and issue get_config again
+            self._send_config(None)
+            config_params = self._send_get_config()
+            if not config_params['is_config'] and not self.is_fileoutput():
+                raise error("Unable to configure MCU '%s'" % (self._name,))
+        else:
+            start_reason = self.hal.get_printer().get_start_args().get("start_reason")
+            if start_reason == 'firmware_restart':
+                raise error("Failed automated reset of MCU '%s'" % (self._name,))
+            # Already configured - send init commands
+            self._send_config(config_params['crc'])
+        # Setup steppersync with the move_count returned by get_config
+        move_count = config_params['move_count']
+        self._steppersync = self._ffi_lib.steppersync_alloc(
+            self._serial.serialqueue, self._stepqueues, len(self._stepqueues),
+            move_count)
+        self._ffi_lib.steppersync_set_time(
+            self._steppersync, 0., self._mcu_freq)
+        # Log config information
+        move_msg = "Configured MCU '%s' (%d moves)" % (self._name, move_count)
+        logging.debug(move_msg)
+        log_info = self._log_info() + "\n" + move_msg
+        self.hal.get_printer().set_rollover_info(self._name, log_info, log=False)
+        # board configured
+        self.hal.get_printer().send_event("mcu:"+self._name+":configured")
+    def _event_handle_mcu_identify(self):
+        # load MCU
+        if self.is_fileoutput():
+            self._connect_file()
+        else:
+            if (self._restart_method == 'rpi_usb'
+                and not os.path.exists(self._serialport)):
+                # Try toggling usb power
+                self._check_restart("enable power")
+            try:
+                self._serial.connect()
+                self._clocksync.connect(self._serial)
+            except serialhdl.error as e:
+                raise error(str(e))
+        logging.debug(self._log_info())
+        #
+        self._mcu_freq = self.get_constant_float('CLOCK_FREQ')
+        self._stats_sumsq_base = self.get_constant_float('STATS_SUMSQ_BASE')
+        self._emergency_stop_cmd = self.lookup_command("emergency_stop")
+        self._reset_cmd = self.try_lookup_command("reset")
+        self._config_reset_cmd = self.try_lookup_command("config_reset")
+        ext_only = self._reset_cmd is None and self._config_reset_cmd is None
+        mbaud = self._serial.get_msgparser().get_constant('SERIAL_BAUD', None)
+        if self._restart_method is None and mbaud is None and not ext_only:
+            self._restart_method = 'command'
+        self.register_response(self._serial_handle_shutdown, 'shutdown')
+        self.register_response(self._serial_handle_shutdown, 'is_shutdown')
+        self.register_response(self._serial_handle_mcu_stats, 'stats')
+        # send event board identified
+        self.hal.get_printer().send_event("mcu:"+self._name+":identified", self._name)
+    def _event_handle_disconnect(self):
+        self._serial.disconnect()
+        if self._steppersync is not None:
+            self._ffi_lib.steppersync_free(self._steppersync)
+            self._steppersync = None
+    def _event_handle_shutdown(self, force=False):
+        if (self._emergency_stop_cmd is None or (self._is_shutdown and not force)):
+            return
+        self._emergency_stop_cmd.send()
     # Serial callbacks
-    def _handle_mcu_stats(self, params):
+    def _serial_handle_mcu_stats(self, params):
         count = params['count']
         tick_sum = params['sum']
         c = 1.0 / (count * self._mcu_freq)
@@ -764,7 +835,7 @@ class MCU:
         diff = count*tick_sumsq - tick_sum**2
         self._mcu_tick_stddev = c * math.sqrt(max(0., diff))
         self._mcu_tick_awake = tick_sum / self._mcu_freq
-    def _handle_shutdown(self, params):
+    def _serial_handle_shutdown(self, params):
         if self._is_shutdown:
             return
         self._is_shutdown = True
@@ -774,7 +845,7 @@ class MCU:
         if params['#name'] == 'is_shutdown':
             prefix = "Previous MCU '%s' shutdown: " % (self._name,)
         self.hal.get_printer().invoke_async_shutdown(prefix + message + msg(message))
-    # Connection phase
+    # connection phase
     def _check_restart(self, reason):
         start_reason = self.hal.get_printer().get_start_args().get("start_reason")
         if start_reason == 'firmware_restart':
@@ -812,11 +883,10 @@ class MCU:
             if not line:
                 continue
             self.add_config_cmd(line)
-    #
     # applies pin_fixup and vector_fixup to all "pin" occurrences in the given command
-    def command_translate(self, cmd):
-        # TODO remove fix_matrix, find a better way to setup the Pins matrix
-        def fix_matrix(pin_id, params):
+    def _command_fixup(self, cmd):
+        # TODO remove vector_fixup, find a better way to setup the Pins matrix
+        def vector_fixup(pin_id, params):
             indices = [i for i, x in enumerate(self._board.pins.id) if x == pin_id] 
             for i in indices:
                 self._board.pins.function[i] = True
@@ -829,11 +899,11 @@ class MCU:
                 pin_params = self._board.pins.active.pop(name)
                 pin_params["pin"] = pin_id
                 self._board.pins.active[pin_id] = pin_params
-                fix_matrix(pin_id,pin_params)
+                vector_fixup(pin_id,pin_params)
             else:
                 pin_id = name
                 pin_params = self._board.pins.active[name]
-                fix_matrix(pin_id,pin_params)
+                vector_fixup(pin_id,pin_params)
             if pin_id in self._board.pins.reserved:
                 raise error("pin %s is reserved for %s" % (name, self._board.pins.reserved[pin_id]))
             return m.group('prefix') + str(pin_id)
@@ -847,15 +917,15 @@ class MCU:
         self._config_cmds.insert(0, "allocate_oids count=%d" % (self._oid_count,))
         #
         for i, cmd in enumerate(self._config_cmds):
-            self._config_cmds[i] = self.command_translate(cmd)
+            self._config_cmds[i] = self._command_fixup(cmd)
         for i, cmd in enumerate(self._init_cmds):
-            self._init_cmds[i] = self.command_translate(cmd)
+            self._init_cmds[i] = self._command_fixup(cmd)
         # Calculate config CRC
         config_crc = zlib.crc32('\n'.join(self._config_cmds)) & 0xffffffff
         self.add_config_cmd("finalize_config crc=%d" % (config_crc,))
         # Transmit config messages (if needed)
         if prev_crc is None:
-            logging.info("- Sending printer configuration to MCU '%s'.", self._name)
+            logging.debug("- Sending printer configuration to MCU '%s'.", self._name)
             for c in self._config_cmds:
                 self._serial.send(c)
         elif config_crc != prev_crc:
@@ -879,67 +949,6 @@ class MCU:
         log_info = ["Loaded MCU '%s' %d commands (%s / %s)" % (self._name, len(msgparser.messages_by_id), msgparser.version, msgparser.build_versions),
             "MCU '%s' config: %s" % (self._name, " ".join(["%s=%s" % (k, v) for k, v in self.get_constants().items()]))]
         return "\n".join(log_info)
-    def _connect(self):
-        config_params = self._send_get_config()
-        if not config_params['is_config']:
-            if self._restart_method == 'rpi_usb':
-                # Only configure mcu after usb power reset
-                self._check_restart("full reset before config")
-            # Not configured - send config and issue get_config again
-            self._send_config(None)
-            config_params = self._send_get_config()
-            if not config_params['is_config'] and not self.is_fileoutput():
-                raise error("Unable to configure MCU '%s'" % (self._name,))
-        else:
-            start_reason = self.hal.get_printer().get_start_args().get("start_reason")
-            if start_reason == 'firmware_restart':
-                raise error("Failed automated reset of MCU '%s'" % (self._name,))
-            # Already configured - send init commands
-            self._send_config(config_params['crc'])
-        # Setup steppersync with the move_count returned by get_config
-        move_count = config_params['move_count']
-        self._steppersync = self._ffi_lib.steppersync_alloc(
-            self._serial.serialqueue, self._stepqueues, len(self._stepqueues),
-            move_count)
-        self._ffi_lib.steppersync_set_time(
-            self._steppersync, 0., self._mcu_freq)
-        # Log config information
-        move_msg = "Configured MCU '%s' (%d moves)" % (self._name, move_count)
-        logging.debug(move_msg)
-        log_info = self._log_info() + "\n" + move_msg
-        self.hal.get_printer().set_rollover_info(self._name, log_info, log=False)
-        # board configured
-        self.hal.get_printer().send_event("mcu:"+self._name+":configured")
-    def _mcu_identify(self):
-        # load MCU
-        if self.is_fileoutput():
-            self._connect_file()
-        else:
-            if (self._restart_method == 'rpi_usb'
-                and not os.path.exists(self._serialport)):
-                # Try toggling usb power
-                self._check_restart("enable power")
-            try:
-                self._serial.connect()
-                self._clocksync.connect(self._serial)
-            except serialhdl.error as e:
-                raise error(str(e))
-        logging.info(self._log_info())
-        #
-        self._mcu_freq = self.get_constant_float('CLOCK_FREQ')
-        self._stats_sumsq_base = self.get_constant_float('STATS_SUMSQ_BASE')
-        self._emergency_stop_cmd = self.lookup_command("emergency_stop")
-        self._reset_cmd = self.try_lookup_command("reset")
-        self._config_reset_cmd = self.try_lookup_command("config_reset")
-        ext_only = self._reset_cmd is None and self._config_reset_cmd is None
-        mbaud = self._serial.get_msgparser().get_constant('SERIAL_BAUD', None)
-        if self._restart_method is None and mbaud is None and not ext_only:
-            self._restart_method = 'command'
-        self.register_response(self._handle_shutdown, 'shutdown')
-        self.register_response(self._handle_shutdown, 'is_shutdown')
-        self.register_response(self._handle_mcu_stats, 'stats')
-        # board identified
-        self.hal.get_printer().send_event("mcu:"+self._name+":identified", self._name)
     # config creation helpers
     def setup_pin(self, pin_type, pin_params):
         pcs = {
@@ -1007,24 +1016,14 @@ class MCU:
         return self._clocksync.estimated_print_time(eventtime)
     def clock32_to_clock64(self, clock32):
         return self._clocksync.clock32_to_clock64(clock32)
-    # Restarts
-    def _disconnect(self):
-        self._serial.disconnect()
-        if self._steppersync is not None:
-            self._ffi_lib.steppersync_free(self._steppersync)
-            self._steppersync = None
-    def _shutdown(self, force=False):
-        if (self._emergency_stop_cmd is None
-            or (self._is_shutdown and not force)):
-            return
-        self._emergency_stop_cmd.send()
+    # restarts
     def _restart_arduino(self):
         logging.info("Attempting MCU '%s' reset", self._name)
-        self._disconnect()
+        self._event_handle_disconnect()
         serialhdl.arduino_reset(self._serialport, self._reactor)
     def _restart_cheetah(self):
         logging.info("Attempting MCU '%s' Cheetah-style reset", self._name)
-        self._disconnect()
+        self._event_handle_disconnect()
         serialhdl.cheetah_reset(self._serialport, self._reactor)
     def _restart_via_command(self):
         if ((self._reset_cmd is None and self._config_reset_cmd is None)
@@ -1035,7 +1034,7 @@ class MCU:
             # Attempt reset via config_reset command
             logging.info("Attempting MCU '%s' config_reset command", self._name)
             self._is_shutdown = True
-            self._shutdown(force=True)
+            self._event_handle_shutdown(force=True)
             self._reactor.pause(self._reactor.monotonic() + 0.015)
             self._config_reset_cmd.send()
         else:
@@ -1043,10 +1042,10 @@ class MCU:
             logging.info("Attempting MCU '%s' reset command", self._name)
             self._reset_cmd.send()
         self._reactor.pause(self._reactor.monotonic() + 0.015)
-        self._disconnect()
+        self._event_handle_disconnect()
     def _restart_rpi_usb(self):
         logging.info("Attempting MCU '%s' reset via rpi usb power", self._name)
-        self._disconnect()
+        self._event_handle_disconnect()
         chelper.run_hub_ctrl(0)
         self._reactor.pause(self._reactor.monotonic() + 2.)
         chelper.run_hub_ctrl(1)
@@ -1087,7 +1086,7 @@ class MCU:
         msg = "%s: mcu_awake=%.03f mcu_task_avg=%.06f mcu_task_stddev=%.06f" % (self._name, self._mcu_tick_awake, self._mcu_tick_avg, self._mcu_tick_stddev)
         return False, ' '.join([msg, self._serial.stats(eventtime), self._clocksync.stats(eventtime)])
     def __del__(self):
-        self._disconnect()
+        self._event_handle_disconnect()
 
 ######################################################################
 # Board := {mcu, pins, UARTs, I2Cs, SPIs, ...}
@@ -1125,10 +1124,10 @@ class Board(part.Object):
         self.hal.mcu_count = self.hal.mcu_count + 1
         self.ready = True
     def register(self):
-        self.hal.get_printer().register_event_handler("mcu:"+self.id()+":identified", self._handle_identified)
-        self.hal.get_printer().register_event_handler("mcu:"+self.id()+":configured", self._handle_configured)
+        self.hal.get_printer().register_event_handler("mcu:"+self.id()+":identified", self._event_handle_identified)
+        self.hal.get_printer().register_event_handler("mcu:"+self.id()+":configured", self._event_handle_configured)
     # events handlers
-    def _handle_identified(self, mcuname):
+    def _event_handle_identified(self, mcuname):
         # init pins
         self.mcu._mcu_type = self.mcu._serial.get_msgparser().get_constant("MCU")
         self.pins.map(self.mcu._mcu_type, self.mcu._pin_map)
@@ -1151,7 +1150,7 @@ class Board(part.Object):
         #for s in spi:
         #    self.bus_pin_reserve()
         #    self.bus_setup_spi()
-    def _handle_configured(self):
+    def _event_handle_configured(self):
         self.hal.get_printer().send_event("board:"+self.id()+":ready")
     # returns pin_params from "pin"
     def pin_parse(self, pin_desc, can_invert=False, can_pullup=False):
@@ -1324,14 +1323,14 @@ class Object(composite.Object):
         self.ready = True
     def register(self):
         for b in self.board:
-            self.hal.get_printer().register_event_handler("board:"+b+":ready", self._handle_ready)
+            self.hal.get_printer().register_event_handler("board:"+b+":ready", self._event_handle_ready)
         self.hal.get_commander().register_command('SHOW_PINS_ALL', self.cmd_SHOW_PINS_ALL, desc=self.cmd_SHOW_PINS_ALL_help)
         self.hal.get_commander().register_command('SHOW_PINS_ACTIVE', self.cmd_SHOW_PINS_ACTIVE, desc=self.cmd_SHOW_PINS_ACTIVE_help)
         self.hal.get_commander().register_command("SHOW_ADC_VALUE", self.cmd_SHOW_ADC_VALUE, desc=self.cmd_SHOW_ADC_VALUE_help)
         self.hal.get_commander().register_command("SHOW_ENDSTOPS", self.cmd_SHOW_ENDSTOPS, desc=self.cmd_SHOW_ENDSTOPS_help)
         #gcode.register_command("M119", self.cmd_SHOW_ENDSTOPS)
     # events handlers
-    def _handle_ready(self):
+    def _event_handle_ready(self):
         self.board_ready = self.board_ready + 1
         if self.board_ready == self.hal.mcu_count:
             self.hal.ready()
@@ -1401,7 +1400,7 @@ class Object(composite.Object):
             for parts in [self.board, self.virtual, self.endstop, self.thermometer, self.hygrometer, self.barometer, self.filament, self.stepper, self.heater, self.cooler]:
                 if node.name in parts:
                     parts.pop(node.name)
-                    return
+                    return None
             logging.warning("Part '%s' not registered in controller. Can't de-register.", node.name)
         else:
             # register
@@ -1433,6 +1432,7 @@ class Object(composite.Object):
                 self.cooler[node.name] = node.object
             else:
                 raise error("Unknown group for part '%s'. Can't register in controller.", name)
+        return node.object
     # commands handlers
     cmd_SHOW_PINS_ALL_help = "Shows all pins."
     def cmd_SHOW_PINS_ALL(self):
@@ -1474,9 +1474,10 @@ def load_node_object(hal, node):
         node.object = Object(hal, node)
     elif node.name.startswith("mcu "):
         if node.attrs_check():
-            hal.get_controller().register_part(node)
+            return hal.get_controller().register_part(node)
         else:
             node.object = Dummy(hal, node)
     elif node.name.startswith("virtual "):
-        hal.get_controller().register_part(node)
+        return hal.get_controller().register_part(node)
+    return node.object
 

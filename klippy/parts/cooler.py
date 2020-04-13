@@ -53,6 +53,7 @@ def load_node_object(hal, node):
         node.object = Object(hal, node)
     else:
         node.object = Dummy(hal,node)
+    return node.object
 
 # Support fans that are enabled when temperature exceeds a set threshold
 #
@@ -199,6 +200,7 @@ class PrinterFan:
 
 def load_config(config):
     return PrinterFan(config)
+
 # Support a fan for cooling the MCU whenever a stepper or heater is on
 #
 # Copyright (C) 2019  Nils Friedchen <nils.friedchen@googlemail.com>
@@ -254,6 +256,7 @@ class ControllerFan:
 
 def load_config_prefix(config):
     return ControllerFan(config)
+
 # Support fans that are enabled when a heater is on
 #
 # Copyright (C) 2016-2018  Kevin O'Connor <kevin@koconnor.net>

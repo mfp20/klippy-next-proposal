@@ -44,11 +44,11 @@ class Primary(part.Object):
         # Enable periodic get_clock timer
         for i in range(8):
             params = serial.send_with_response('get_clock', 'clock')
-            self._handle_clock(params)
+            self._serial_handle_clock(params)
             self.reactor.pause(self.reactor.monotonic() + 0.050)
         self.get_clock_cmd = serial.get_msgparser().create_command('get_clock')
         self.cmd_queue = serial.alloc_command_queue()
-        serial.register_response(self._handle_clock, 'clock')
+        serial.register_response(self._serial_handle_clock, 'clock')
         self.reactor.update_timer(self.get_clock_timer, self.reactor.NOW)
     def connect_file(self, serial, pace=False):
         self.serial = serial
@@ -58,14 +58,14 @@ class Primary(part.Object):
         if pace:
             freq = self.mcu_freq
         serial.set_clock_est(freq, self.reactor.monotonic(), 0)
-    # MCU clock querying (_handle_clock is invoked from background thread)
+    # MCU clock querying (_serial_handle_clock is invoked from background thread)
     def _get_clock_event(self, eventtime):
         self.serial.raw_send(self.get_clock_cmd, 0, 0, self.cmd_queue)
         self.queries_pending += 1
         # Use an unusual time for the next event so clock messages
         # don't resonate with other periodic events.
         return eventtime + .9839
-    def _handle_clock(self, params):
+    def _serial_handle_clock(self, params):
         self.queries_pending = 0
         # Extend clock to 64bit
         last_clock = self.last_clock
@@ -214,4 +214,4 @@ class Secondary(Primary):
 
 def load_node_object(hal, node):
     node.object = Primary(hal, node, hal.get_reactor())
-
+    return node.object

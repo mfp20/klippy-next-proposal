@@ -7,7 +7,6 @@
 import logging,collections
 import part
 
-ATTRS = ("volt", "power", "pin_pg")
 
 # TODO 
 class Dummy(part.Object):
@@ -37,9 +36,11 @@ def load_tree_node(hal, node, parts):
     used_parts.add(node.name)
     return used_parts
 
+ATTRS = ("volt", "power", "pin_pg")
 def load_node_object(hal, node):
     if node.attrs_check():
         node.object = Object(hal, node)
     else:
         node.object = Dummy(hal,node)
+    return node.object
 

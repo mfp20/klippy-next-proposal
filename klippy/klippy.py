@@ -18,6 +18,7 @@ def arg_dictionary(option, opt_str, value, parser):
     parser.values.dictionary[key] = fname
 
 def main():
+    # parse command line options
     usage = "%prog [options] <config file>"
     opts = optparse.OptionParser(usage)
     opts.add_option("-i", "--debuginput", dest="debuginput",
@@ -38,9 +39,8 @@ def main():
     if len(args) != 1:
         opts.error("Incorrect number of arguments")
     start_args = {'config_file': args[0], 'start_reason': 'startup'}
-
+    # init logging
     input_fd = bglogger = None
-
     debuglevel = logging.INFO
     if options.verbose:
         debuglevel = logging.DEBUG
@@ -57,7 +57,7 @@ def main():
         bglogger = queuelogger.setup_bg_logging(options.logfile, debuglevel)
     else:
         logging.basicConfig(level=debuglevel)
-    logging.info("Starting Klippy...")
+    logging.info("* Starting Klippy...")
     start_args['software_version'] = util.get_git_version()
     if bglogger is not None:
         versions = "\n".join([
@@ -68,23 +68,28 @@ def main():
         logging.info(versions)
     elif not options.debugoutput:
         logging.warning("No log file specified! Severe timing issues may result!")
-
-    # Start Printer() class
+    # (re)start printer.Main() class
     while 1:
         if bglogger is not None:
             bglogger.clear_rollover_info()
             bglogger.set_rollover_info('versions', versions)
+        # - init hardware manager (ie: hw abstraction layer), 
+        # - init reactor (ie: fds and timers microthreading),
+        # - set klippy._connect as first task to run
         klippy = printer.Main(input_fd, bglogger, start_args)
+        # open, read, parse, validate cfg file, build printer tree
+        klippy.config() 
+        # go! 
         res = klippy.run()
         if res in ['exit', 'error_exit']:
             break
         time.sleep(1.)
         logging.info("Restarting printer")
         start_args['start_reason'] = res
-
+    # close logger thread
     if bglogger is not None:
         bglogger.stop()
-
+    # return
     if res == 'error_exit':
         sys.exit(-1)
 

@@ -19,8 +19,6 @@ class PrinterNode:
         return self.name.split(" ")[0]
     def id(self):
         return self.name.split(" ")[1]
-    def name(self):
-        return self.name
     def parent(self, root, childname):
         if not root: root = self
         for cn in root.children.keys():
@@ -28,6 +26,203 @@ class PrinterNode:
            ccn = root.children[cn].parent(root.children[cn], childname)
            if ccn: return ccn
         return None
+    # attrs needed for object __init__
+    def attrs_check(self, attrs = None):
+        if self.module:
+            if attrs:
+                myattrs = "ATTRS_"+attrs.upper()
+            else:
+                myattrs = "ATTRS"
+            if hasattr(self.module, myattrs):
+                for a in getattr(self.module, myattrs):
+                    if a not in self.attrs:
+                        if self.name:
+                            logging.warning("AttrsCheck: no option '%s' for node '%s'.", a, self.name)
+                        return False
+            else:
+                if self.name:
+                    logging.warning("AttrsCheck: no attrs for node '%s'.", self.name)
+                return False
+        else:
+            if self.name:
+                logging.warning("AttrsCheck: no module for node '%s'.", self.name)
+            return False
+        return True
+    # set attr
+    def attr_set(self, key, value):
+        self.attrs[key] = value
+    # get attr
+    def attr(self, attr):
+        #logging.warning("ATTR_GET: '%s' ATTR %s", self.name, attr)
+        try:
+            return self.attrs[attr]
+        except Exception as e:
+            logging.info("\tEXCEPTION! '%s' - '%s'", self.name, attr)
+            logging.info(self.attrs)
+            return "|||noattr|||"
+    # validate and create attrs
+    def attr_check_default(self, template):
+        if "default" in template:
+            return True
+        return False
+    def attr_check_minmax(self, template, value):
+        if "minval" in template:
+            if value < template["minval"]:
+                return True
+        if "maxval" in template:
+            if value > template["maxval"]:
+                return True
+        return False
+    def attr_check_abovebelow(self, template, value):
+        if "above" in template:
+            if value <= template["above"]:
+                return True
+        if "below" in template:
+            if value >= template["below"]:
+                return True
+        return False
+    def attr_check_choice(self, template, value):
+        if value in template["choices"]:
+            return False
+        return True
+    # load node attrs as object's attrs
+    def _name2ref(self, name, value):
+        #logging.info("SET '%s' to '%s'", name, value)
+        if hasattr(self.object, name):
+            raise error("Attr exists. Please check option name '%s' for '%s'", name, self.name)
+        else:
+            setattr(self.object, name, value)
+        #logging.info("\t'%s' is '%s'", name, getattr(self.object, name))
+    def attrs2obj(self):
+        if hasattr(self, "attrs"): 
+            for a in self.object.metaconf:
+                # convert var references in values, if a var reference is given as value for another var
+                for m in self.object.metaconf[a].items():
+                    if isinstance(m[1], str) and m[1].startswith("self."):
+                        self.object.metaconf[a][m[0]] = getattr(self.object, m[1].split(".", 1)[1])
+                #
+                if a in self.attrs:
+                    if self.object.metaconf[a]["t"] == "bool":
+                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
+                            value = bool(getattr(self.object, self.attr(a).split(".", 1)[1]))
+                        else:
+                            value = bool(self.attr(a))
+                    elif self.object.metaconf[a]["t"] == "int":
+                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
+                            value = int(getattr(self.object, self.attr(a).split(".", 1)[1]))
+                        else:
+                            value = int(self.attr(a))
+                        if self.attr_check_minmax(self.object.metaconf[a], value):
+                            raise error("Value '%s' exceed min/max for option '%s' in node '%s'." % (value, a, self.name))
+                    elif self.object.metaconf[a]["t"] == "float":
+                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
+                            value = float(getattr(self.object, self.attr(a).split(".", 1)[1]))
+                        else:
+                            value = float(self.attr(a))
+                        if self.attr_check_minmax(self.object.metaconf[a], value):
+                            raise error("Value '%s' exceed min/max for option '%s' in node '%s'." % (value, a, self.name))
+                        if self.attr_check_abovebelow(self.object.metaconf[a], value):
+                            raise error("Value '%s' above/below maximum/minimum for option '%s' in node '%s'." % (value, a, self.name))
+                    elif self.object.metaconf[a]["t"] == "str":
+                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
+                            value = str(getattr(self.object, self.attr(a).split(".", 1)[1]))
+                        else:
+                            value = str(self.attr(a))
+                    elif self.object.metaconf[a]["t"] == "choice":
+                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
+                            value = getattr(self.object, self.attr(a).split(".", 1)[1])
+                        else:
+                            value = self.attr(a)
+                        if value == "none" or value == "None":
+                            value = None
+                        if self.attr_check_choice(self.object.metaconf[a], value):
+                            raise error("Value '%s' is not a choice for option '%s' in node '%s'." % (value, a, self.name))
+                    else:
+                        raise error("Unknown option type '%s' in template, for node '%s'" % (a, self.name))
+                else:
+                    if self.attr_check_default(self.object.metaconf[a]):
+                        value = self.object.metaconf[a]["default"]
+                    else:
+                        raise error("Option '%s' is mandatory for node '%s'" % (a, self.name))
+                # each attr is converted into an object method
+                self._name2ref("_"+a, value)
+            # cleanup
+            self.object.metaconf.clear()
+            # TODO remove any use of self.attrs after init, to clear the var here
+            #del(self.attrs)
+    # add new child
+    def child_set(self, node):
+        self.children[node.name] = node
+    # get child by name
+    def child_get(self, name):
+        return self.children[name]
+    # get first child (deep recursion) which name starts with "name"
+    def child_get_first(self, name, root = None):
+        if not root: root = self
+        if root.name.startswith(name): 
+            return root
+        for child in root.children.values():
+           n = child.child_get_first(name, child)
+           if n: return n
+        return None
+    # move child to another parent
+    def child_move(self, name, newparentname, root = None):
+        if not root: root = self
+        child = root.del_node(name)
+        if child:
+            newparent = root.child_get_first(newparentname)
+            if newparent:
+                newparent.children[name] = child
+                return True
+        return False
+    # delete child
+    def child_del(self, name, root = None):
+        if not root: root = self
+        parent = root.parent_get(name)
+        if parent:
+            return parent.children.pop(name)
+        return None
+    # list shallow children
+    def children_list(self, name = None):
+        if name:
+            cl = list()
+            for c in self.children.values():
+                if c.name.startswith(name):
+                    cl.append(c)
+            return cl
+        else:
+            return self.children.values()
+    # list deep children
+    def children_deep(self, l = list(), root = None):
+        if not root: root = self
+        if not l: l.append(root)
+        for name, child in root.children.items():
+            l.append(child)
+            self.children_deep(l, child)
+        return l
+    # list deep children which name starts with "name"
+    def children_deep_byname(self, name, l, root = None):
+        if not root: root = self
+        if root.name.startswith(name):
+            if not l:
+                l.append(root)
+        for child in root.children.values():
+            if child.name.startswith(name):
+                l.append(child)
+            child.children_deep_byname(name, l, child)
+        return l
+    # list shallow children names
+    def children_names(self, node = None):
+        if not node: node = self
+        return node.children.keys()
+    # list deep children names
+    def children_names_deep(self, l = list(), root = None):
+        if not root: root = self
+        if not l: l.append(root.name)
+        for child in root.children.values():
+            l.append(child.name)
+            self.children_names_deep(l, child)
+        return l
     def show(self, node = None, indent=0):
         if node == None: node = self
         txt = "\t" * indent + "---\n"
@@ -170,202 +365,6 @@ class PrinterNode:
         for key, value in node.children.items():
             txt = txt + self.show_deep(value, indent+1, plus)
         return txt
-    # attrs needed for object __init__
-    def attrs_check(self, attrs = None):
-        if self.module:
-            if attrs:
-                myattrs = "ATTRS_"+attrs.upper()
-            else:
-                myattrs = "ATTRS"
-            if hasattr(self.module, myattrs):
-                for a in getattr(self.module, myattrs):
-                    if a not in self.attrs:
-                        if self.name:
-                            logging.warning("AttrsCheck: no option '%s' for node '%s'.", a, self.name)
-                        return False
-            else:
-                if self.name:
-                    logging.warning("AttrsCheck: no attrs for node '%s'.", self.name)
-                return False
-        else:
-            if self.name:
-                logging.warning("AttrsCheck: no module for node '%s'.", self.name)
-            return False
-        return True
-    # set attr
-    def attr_set(self, key, value):
-        self.attrs[key] = value
-    # get attr
-    def attr(self, attr):
-        #logging.warning("ATTR_GET: '%s' ATTR %s", self.name, attr)
-        try:
-            return self.attrs[attr]
-        except Exception as e:
-            logging.info("\tEXCEPTION! '%s' - '%s'", self.name, attr)
-            logging.info(self.attrs)
-            return "|||noattr|||"
-    # validate and create attrs
-    def attr_check_default(self, template):
-        if "default" in template:
-            return True
-        return False
-    def attr_check_minmax(self, template, value):
-        if "minval" in template:
-            if value < template["minval"]:
-                return True
-        if "maxval" in template:
-            if value > template["maxval"]:
-                return True
-        return False
-    def attr_check_abovebelow(self, template, value):
-        if "above" in template:
-            if value <= template["above"]:
-                return True
-        if "below" in template:
-            if value >= template["below"]:
-                return True
-        return False
-    def attr_check_choice(self, template, value):
-        if value in template["choices"]:
-            return False
-        return True
-    # load node attrs as object's attrs
-    def _name2ref(self, name, value):
-        #logging.info("SET '%s' to '%s'", name, value)
-        if hasattr(self.object, name):
-            raise error("Attr exists. Please check option name '%s' for '%s'", name, self.name)
-        else:
-            setattr(self.object, name, value)
-        #logging.info("\t'%s' is '%s'", name, getattr(self.object, name))
-    def attrs2obj(self):
-        for a in self.object.metaconf:
-            # convert var references in values, if a var reference is given as value for another var
-            for m in self.object.metaconf[a].items():
-                if isinstance(m[1], str) and m[1].startswith("self."):
-                    self.object.metaconf[a][m[0]] = getattr(self.object, m[1].split(".", 1)[1])
-            #
-            if a in self.attrs:
-                if self.object.metaconf[a]["t"] == "bool":
-                    if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                        value = bool(getattr(self.object, self.attr(a).split(".", 1)[1]))
-                    else:
-                        value = bool(self.attr(a))
-                elif self.object.metaconf[a]["t"] == "int":
-                    if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                        value = int(getattr(self.object, self.attr(a).split(".", 1)[1]))
-                    else:
-                        value = int(self.attr(a))
-                    if self.attr_check_minmax(self.object.metaconf[a], value):
-                        raise error("Value '%s' exceed min/max for option '%s' in node '%s'." % (value, a, self.name))
-                elif self.object.metaconf[a]["t"] == "float":
-                    if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                        value = float(getattr(self.object, self.attr(a).split(".", 1)[1]))
-                    else:
-                        value = float(self.attr(a))
-                    if self.attr_check_minmax(self.object.metaconf[a], value):
-                        raise error("Value '%s' exceed min/max for option '%s' in node '%s'." % (value, a, self.name))
-                    if self.attr_check_abovebelow(self.object.metaconf[a], value):
-                        raise error("Value '%s' above/below maximum/minimum for option '%s' in node '%s'." % (value, a, self.name))
-                elif self.object.metaconf[a]["t"] == "str":
-                    if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                        value = str(getattr(self.object, self.attr(a).split(".", 1)[1]))
-                    else:
-                        value = str(self.attr(a))
-                elif self.object.metaconf[a]["t"] == "choice":
-                    if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                        value = getattr(self.object, self.attr(a).split(".", 1)[1])
-                    else:
-                        value = self.attr(a)
-                    if value == "none" or value == "None":
-                        value = None
-                    if self.attr_check_choice(self.object.metaconf[a], value):
-                        raise error("Value '%s' is not a choice for option '%s' in node '%s'." % (value, a, self.name))
-                else:
-                    raise error("Unknown option type '%s' in template, for node '%s'" % (a, self.name))
-            else:
-                if self.attr_check_default(self.object.metaconf[a]):
-                    value = self.object.metaconf[a]["default"]
-                else:
-                    raise error("Option '%s' is mandatory for node '%s'" % (a, self.name))
-            # each attr is converted into an object method
-            self._name2ref("_"+a, value)
-        # cleanup
-        self.object.metaconf.clear()
-        # TODO remove any use of self.attrs after init, to clear the var here
-        #del(self.attrs)
-    # add new child
-    def child_set(self, node):
-        self.children[node.name] = node
-    # get child by name
-    def child_get(self, name):
-        return self.children[name]
-    # get first child (deep recursion) which name starts with "name"
-    def child_get_first(self, name, root = None):
-        if not root: root = self
-        if root.name.startswith(name): 
-            return root
-        for child in root.children.values():
-           n = child.child_get_first(name, child)
-           if n: return n
-        return None
-    # move child to another parent
-    def child_move(self, name, newparentname, root = None):
-        if not root: root = self
-        child = root.del_node(name)
-        if child:
-            newparent = root.child_get_first(newparentname)
-            if newparent:
-                newparent.children[name] = child
-                return True
-        return False
-    # delete child
-    def child_del(self, name, root = None):
-        if not root: root = self
-        parent = root.parent_get(name)
-        if parent:
-            return parent.children.pop(name)
-        return None
-    # list shallow children
-    def children_list(self, name = None):
-        if name:
-            cl = list()
-            for c in self.children.values():
-                if c.name.startswith(name):
-                    cl.append(c)
-            return cl
-        else:
-            return self.children.values()
-    # list deep children
-    def children_deep(self, l = list(), root = None):
-        if not root: root = self
-        if not l: l.append(root)
-        for name, child in root.children.items():
-            l.append(child)
-            self.children_deep(l, child)
-        return l
-    # list deep children which name starts with "name"
-    def children_deep_byname(self, name, l, root = None):
-        if not root: root = self
-        if root.name.startswith(name):
-            if not l:
-                l.append(root)
-        for child in root.children.values():
-            if child.name.startswith(name):
-                l.append(child)
-            child.children_deep_byname(name, l, child)
-        return l
-    # list shallow children names
-    def children_names(self, node = None):
-        if not node: node = self
-        return node.children.keys()
-    # list deep children names
-    def children_names_deep(self, l = list(), root = None):
-        if not root: root = self
-        if not l: l.append(root.name)
-        for child in root.children.values():
-            l.append(child.name)
-            self.children_names_deep(l, child)
-        return l
 
 class PrinterTree:
     def __init__(self): 
@@ -375,5 +374,5 @@ class PrinterTree:
         return self.printer.show_deep(self.printer, indent, plus) + "\n" + self.printer.show(self.spare, indent)
     cmd_SHOW_PRINTER_help = "Shows the printer tree and some additional info in console."
     def cmd_SHOW_PRINTER(self):
-        self.respond_info("\n".join(self.show(2, plus = "object")), log=False)
+        self.respond_info("\n".join(self.show(2)), log=False)
 

@@ -20,29 +20,14 @@ class Main:
         self.start_args = start_args
         self.hw = hw.Manager(sys.modules[__name__], self)
         self.reactor = self.hw.get_reactor()
+        # enqueue self._connect for reactor.run() (see self.run())
         self.reactor.register_callback(self._connect)
+        # misc attrs
         self.state_message = msg("startup")
         self.is_shutdown = False
         self.run_result = None
         self.event_handlers = {}
-    def register(self):
-        self.hw.get_commander().register_command("SAVE_CONFIG", self.cmd_SAVE_CONFIG, desc=self.cmd_SAVE_CONFIG_help)
-    def get_start_args(self):
-        return self.start_args
-    def get_reactor(self):
-        return self.reactor
-    def get_state_message(self):
-        return self.state_message
-    def _set_state(self, message):
-        if self.state_message in (msg("ready"), msg("startup")):
-            self.state_message = message
-        if (message != msg("ready") and self.start_args.get('debuginput') is not None):
-            self.request_exit('error_exit')
-    def set_rollover_info(self, name, info, log=True):
-        if log:
-            logging.info(info)
-        if self.bglogger is not None:
-            self.bglogger.set_rollover_info(name, info)
+    # config helpers
     def try_load_module(self, config, section):
         module_parts = section.split()
         module_name = module_parts[0]
@@ -52,7 +37,7 @@ class Main:
             logging.warning(msg(("noexist1", py_name)))
             return None
         return importlib.import_module('plugins.' + module_name)
-    def autoload(self, hal):
+    def try_autoload_printlets(self, hal):
         path = os.path.join(os.path.dirname(__file__), "printlets")
         for file in os.listdir(path):
             if file.endswith(".py") and not file.startswith("__init__"):
@@ -62,24 +47,29 @@ class Main:
                 if init_func is not None:
                     return init_func(hal)
                 return None
-    def _read_config(self):
+    # open, read, parse, validate cfg file, and build printer tree
+    def config(self):
+        # open and read
         pconfig = configfile.PrinterConfig(self.hw)
+        # parse
         config = pconfig.read_main_config()
         if self.bglogger is not None:
             pconfig.log_config(config)
-        # Validate that there are no undefined parameters in the config file
+        # validate that there are no undefined parameters in the config file
         #pconfig.check_unused_options(config, self.hw)
         # turn config into a printer tree
         Composer(config, self.hw)
         # load printer objects
         self.hw.load_tree_objects()
+    # register local event handlers and commands
+    def register(self):
+        self.hw.get_commander().register_command("SAVE_CONFIG", self.cmd_SAVE_CONFIG, desc=self.cmd_SAVE_CONFIG_help)
+    # first reactor job
     def _connect(self, eventtime):
+        # identify mcu and complete controller init
         try:
-            # parse config
-            self._read_config()
-            # identify mcu and complete controller init
             self.send_event("klippy:mcu_identify")
-            # ready to connect
+            # exec connect jobs
             for cb in self.event_handlers.get("klippy:connect", []):
                 if self.state_message is not msg("startup"):
                     return
@@ -100,6 +90,7 @@ class Main:
             logging.exception("Unhandled exception during connect")
             self._set_state("Internal error during connect: %s\n%s" % (str(e), msg("restart"),))
             return
+        # exec ready jobs
         try:
             self._set_state(msg("ready"))
             for cb in self.event_handlers.get("klippy:ready", []):
@@ -108,21 +99,22 @@ class Main:
                 cb()
         except Exception as e:
             logging.exception("Unhandled exception during ready callback")
-            self.invoke_shutdown("Internal error during ready callback: %s" % (
-                str(e),))
+            self.invoke_shutdown("Internal error during ready callback: %s" % (str(e),))
         systime = time.time()
         logging.info("* Init complete at %s (%.1f %.1f)", time.asctime(time.localtime(systime)), time.time(), self.reactor.monotonic())
+    # reactor go!
     def run(self):
         systime = time.time()
         monotime = self.reactor.monotonic()
         logging.info("* Init printer at %s (%.1f %.1f)", time.asctime(time.localtime(systime)), systime, monotime)
-        # Enter main reactor loop
+        # main reactor loop
         try:
+            # exec self._connect and keep going...
             self.reactor.run()
         except:
             logging.exception("Unhandled exception during run")
             return "error_exit"
-        # Check restart flags
+        # restart flags
         run_result = self.run_result
         try:
             if run_result == 'firmware_restart':
@@ -132,6 +124,21 @@ class Main:
         except:
             logging.exception("Unhandled exception during post run")
         return run_result
+    #
+    def get_start_args(self):
+        return self.start_args
+    def get_state_message(self):
+        return self.state_message
+    def _set_state(self, message):
+        if self.state_message in (msg("ready"), msg("startup")):
+            self.state_message = message
+        if (message != msg("ready") and self.start_args.get('debuginput') is not None):
+            self.request_exit('error_exit')
+    def set_rollover_info(self, name, info, log=True):
+        if log:
+            logging.info(info)
+        if self.bglogger is not None:
+            self.bglogger.set_rollover_info(name, info)
     def invoke_shutdown(self, message):
         if self.is_shutdown:
             return
@@ -143,8 +150,7 @@ class Main:
             except:
                 logging.exception("Exception during shutdown handler")
     def invoke_async_shutdown(self, message):
-        self.reactor.register_async_callback(
-            (lambda e: self.invoke_shutdown(message)))
+        self.reactor.register_async_callback((lambda e: self.invoke_shutdown(message)))
     def register_event_handler(self, event, callback):
         self.event_handlers.setdefault(event, []).append(callback)
     def send_event(self, event, *params):
@@ -153,8 +159,7 @@ class Main:
         if self.run_result is None:
             self.run_result = result
         self.reactor.end()
-
-    # moved from configfile (to remove configfile dependancy from gcode)
+    # commands
     def _disallow_include_conflicts(self, regular_data, cfgname, gcode):
         config = self._build_config_wrapper(regular_data, cfgname)
         for section in self.autosave.fileconfig.sections():
@@ -213,16 +218,16 @@ class Main:
 # tree and parts composer
 class Composer:
     def __init__(self, config, hal):
+        logging.debug("- Composing printer tree.")
         self.hal = hal
-        logging.info("- Composing printer tree.")
-        self.pgroups = hal.pgroups
-        self.cgroups = hal.cgroups
+        self.pgroups = self.hal.pgroups
+        self.cgroups = self.hal.cgroups
         partnames_to_remove = set()
         # read parts
         parts = collections.OrderedDict()
         for p in self.pgroups:
             for s in config.get_prefix_sections(p+" "):
-                part = tree.PrinterNode(s.get_name())
+                part = self.mk(s.get_name())
                 for k in s.fileconfig.options(s.get_name()):
                     part.attr_set(k, s.get(k))
                 if p == "mcu":
@@ -236,7 +241,7 @@ class Composer:
                 parts[part.name] = part
         # read plugins
         for m in config.get_prefix_extra_sections(self.pgroups+self.cgroups):
-            part = tree.PrinterNode(m.get_name())
+            part = self.mk(m.get_name())
             for k in m.fileconfig.options(m.get_name()):
                 part.attrs[k] = m.get(k)
             part.module = config.get_printer().try_load_module(config, m.get_name())
@@ -246,7 +251,7 @@ class Composer:
         composites = collections.OrderedDict()
         for p in self.cgroups:
             for s in config.get_prefix_sections(p+" "):
-                c = self.compose(tree.PrinterNode(s.get_name()), config, parts, composites)
+                c = self.compose(self.mk(s.get_name()), config, parts, composites)
                 if p == "rail" or p == "cart":
                     c.module = importlib.import_module("parts."+p)
                 elif p == "tool":
@@ -256,41 +261,46 @@ class Composer:
         for c in composites:
             parts[c] = composites[c]
         del(composites)
-        # build tree: basic modules and parts
-        hal.node("printer").child_set(tree.PrinterNode("commander"))
-        hal.node("printer").child_set(tree.PrinterNode("controller"))
-        hal.node("controller").child_set(tree.PrinterNode("timing"))
-        hal.node("controller").child_set(tree.PrinterNode("temperature"))
+        # build tree: basic modules
+        self.mk_child("printer", "commander")
+        self.mk_child("printer", "controller")
+        self.mk_child("controller", "timing")
+        self.mk_child("controller", "temperature")
         for n in ["reactor", "commander", "controller", "timing", "temperature"]:
-            hal.node(n).module = importlib.import_module(n)
+            self.hal.node(n).module = importlib.import_module(n)
         # adding parts and composites nodes.
         for a in config.getsection("printer").fileconfig.options("printer"):
             if a in self.pgroups or a in self.cgroups:
                 if a == "mcu":
                     for n in config.getsection("printer").get(a).split(","):
-                        hal.node("controller").children[a+" "+n] = parts.pop(a+" "+n)
+                        self.hal.node("controller").children[a+" "+n] = parts.pop(a+" "+n)
                 else:
                     for n in config.getsection("printer").get(a).split(","):
-                        hal.tree.printer.children[a+" "+n] = parts.pop(a+" "+n)
+                        self.hal.tree.printer.children[a+" "+n] = parts.pop(a+" "+n)
             elif a == "toolhead":
                 for n in config.getsection("printer").get(a).split(","):
                     partnames_to_remove = partnames_to_remove.union(self.compose_toolhead(config.get_prefix_sections(a+" "+n)[0], parts))
             else:
-                hal.tree.printer.attrs[a] = config.get(a)
+                self.hal.tree.printer.attrs[a] = config.get(a)
+        # adding virtual pins
         for p in parts:
             if p.startswith("virtual "):
-                hal.node("controller").children[p] = parts.pop(p)
+                self.hal.node("controller").children[p] = parts.pop(p)
         # adding plugins nodes
         for m in config.get_prefix_extra_sections(self.pgroups+self.cgroups):
             if m.get_name() in parts:
-                partnames_to_remove = partnames_to_remove.union(parts[m.get_name()].module.load_tree_node(hal, parts[m.get_name()], parts))
+                partnames_to_remove = partnames_to_remove.union(parts[m.get_name()].module.load_tree_node(self.hal, parts[m.get_name()], parts))
         # cleanup
         for i in partnames_to_remove:
             if i in parts:
                 parts.pop(i)
-        # save spares
+        # save leftover parts to spares
         for i in parts:
-            hal.tree.spare.children[i] = parts.pop(i)
+            self.hal.tree.spare.children[i] = parts.pop(i)
+    def mk(self, name):
+        return tree.PrinterNode(name)
+    def mk_child(self, parentname, childname):
+        self.hal.node(parentname).child_set(self.mk(childname))
     def compose(self, composite, config, parts, composites):
         section = config.get_prefix_sections(composite.name)
         for o in config.fileconfig.options(composite.name):
@@ -314,17 +324,23 @@ class Composer:
         return composite
     def compose_toolhead(self, config, parts):
         name = config.get_name()
+        # kinematic is the toolhead's root
         knode = tree.PrinterNode("kinematic "+name.split(" ")[1])
         ktype = config.getsection(name).get("kinematics")
-        knode.attr_set("type", ktype)
         knode.module = importlib.import_module('kinematics.' + ktype)
+        knode.attr_set("type", ktype)
+        self.hal.tree.printer.child_set(knode)
+        # toolhead node is kinematic's child
         toolhead = tree.PrinterNode(name)
         toolhead.module = importlib.import_module("instrument")
-        toolhead.child_set(tree.PrinterNode("gcode "+name.split(" ")[1]))
-        toolhead.children["gcode "+name.split(" ")[1]].module = self.hal.node("commander").module
         for a in config.getsection(name).fileconfig.options(name):
             toolhead.attrs[a] = config.getsection(name).get(a)
         knode.child_set(toolhead)
+        # gcode node is toolhead's child
+        gnode = tree.PrinterNode("gcode "+name.split(" ")[1])
+        gnode.module = self.hal.node("commander").module
+        toolhead.child_set(gnode)
+        # build toolhead rails and carts
         return knode.module.load_tree_node(self.hal, knode, parts)
 
 

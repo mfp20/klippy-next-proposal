@@ -231,4 +231,5 @@ class Manager(part.Object):
 
 def load_node_object(hal, node):
     node.object = Manager(hal, node)
+    return node.object
 

@@ -195,16 +195,17 @@ def load_node_object(hal, node):
         if node.attrs["type"] == "pins":
             if node.attrs_check("pins"):
                 node.object = Object(hal, node)
-                return
+                return node.object
         elif node.attrs["type"] == "i2c":
             if node.attrs_check("i2c"):
                 node.object = Object(hal, node)
-                return
+                return node.object
         elif node.attrs["type"] == "spi":
             if node.attrs_check("spi"):
                 node.object = Object(hal, node)
-                return
+                return node.object
     node.object = Dummy(hal,node)
+    return node.object
 
 #
 # Utility for manually moving a stepper for diagnostic purposes

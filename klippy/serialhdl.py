@@ -30,8 +30,8 @@ class SerialReader:
         self.background_thread = None
         # Message handlers
         self.handlers = {}
-        self.register_response(self._handle_unknown_init, '#unknown')
-        self.register_response(self.handle_output, '#output')
+        self.register_response(self._serial_handle_unknown_init, '#unknown')
+        self.register_response(self._serial_handle_output, '#output')
         # Sent message notification tracking
         self.last_notify_id = 0
         self.pending_notifications = {}
@@ -76,7 +76,7 @@ class SerialReader:
                 identify_data += msgdata
     def connect(self):
         # Initial connection
-        logging.info("- Starting serial connect to '%s' at '%s' baud.", self.serialport, self.baud)
+        logging.debug("- Starting serial connect to '%s' at '%s' baud.", self.serialport, self.baud)
         start_time = self.reactor.monotonic()
         while 1:
             connect_time = self.reactor.monotonic()
@@ -109,7 +109,7 @@ class SerialReader:
         msgparser = msgproto.MessageParser()
         msgparser.process_identify(identify_data)
         self.msgparser = msgparser
-        self.register_response(self.handle_unknown, '#unknown')
+        self.register_response(self._serial_handle_unknown, '#unknown')
         # Setup baud adjust
         mcu_baud = msgparser.get_constant_float('SERIAL_BAUD', None)
         if mcu_baud is not None:
@@ -209,13 +209,11 @@ class SerialReader:
                 i, msg.receive_time, msg.sent_time, msg.len, ', '.join(cmds)))
         return '\n'.join(out)
     # Default message handlers
-    def _handle_unknown_init(self, params):
-        logging.debug("Unknown message %d (len %d) while identifying",
-                      params['#msgid'], len(params['#msg']))
-    def handle_unknown(self, params):
-        logging.warn("Unknown message type %d: %s",
-                     params['#msgid'], repr(params['#msg']))
-    def handle_output(self, params):
+    def _serial_handle_unknown_init(self, params):
+        logging.debug("Unknown message %d (len %d) while identifying", params['#msgid'], len(params['#msg']))
+    def _serial_handle_unknown(self, params):
+        logging.warn("Unknown message type %d: %s", params['#msgid'], repr(params['#msg']))
+    def _serial_handle_output(self, params):
         logging.info("%s: %s", params['#name'], params['#msg'])
     def handle_default(self, params):
         logging.warn("got %s", params)

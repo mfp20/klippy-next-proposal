@@ -476,4 +476,5 @@ def load_node_object(hal, node):
             #node.object.metaconf["pid_integral_max"] = {"t":"float", "default":self._power_max, "minval":0.}
     else:
         node.object = Dummy(hal,node)
+    return node.object
 

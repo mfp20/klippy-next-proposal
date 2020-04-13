@@ -9,8 +9,6 @@ import logging
 import hw, composite, instrument
 from kinematics.dummy import Object as Dummy
 
-ATTRS = ("type",)
-
 class Object(composite.Object):
     def __init__(self,hal,node):
         composite.Object.__init__(self,hal,node)
@@ -183,13 +181,13 @@ def load_tree_node(hal, knode, parts):
         elif a in hal.pgroups or a in hal.cgroups:
             for p in thnode.attrs[a].split(","):
                 thnode.children[parts[a+" "+p].name] = parts[a+" "+p]
-    # add toolhead to printer tree
-    hal.tree.printer.children[knode.name] = knode
     return used_parts
 
+ATTRS = ("type",)
 def load_node_object(hal, node):
     if node.attrs_check():
         node.object = Object(hal, node)
     else:
         node.object = Dummy(hal,node)
+    return node.object
 

@@ -89,8 +89,9 @@ AUTOSAVE_HEADER = """
 
 class PrinterConfig:
     def __init__(self, hal):
-        logging.info("- Reading config file.")
+        logging.debug("- Reading config file.")
         self.printer = hal.tree.printer.object
+        self.hal = hal
         self.autosave = None
         self.status_info = {}
     def get_printer(self):

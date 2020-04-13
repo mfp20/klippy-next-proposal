@@ -581,4 +581,4 @@ def load_node_object(hal, node):
         node.object.metaconf["type"] = {"t":"str", "default":"thermometer"}
     else:
         node.object = Dummy(hal,node)
-
+    return node.object
