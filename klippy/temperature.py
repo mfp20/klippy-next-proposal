@@ -155,7 +155,7 @@ logging.info(temperature.available_sensors)
 INFO:root:['heater_bed', 'extruder']
 '''
 
-class Object(part.Object):
+class Manager(part.Object):
     def __init__(self, hal, node):
         part.Object.__init__(self, hal, node)
         self.govoff = governor.AlwaysOff()
@@ -230,5 +230,5 @@ class Object(part.Object):
         return {'available_heaters': self.available_heaters, 'available_sensors': self.available_sensors}
 
 def load_node_object(hal, node):
-    node.object = Object(hal, node)
+    node.object = Manager(hal, node)
 

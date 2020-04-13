@@ -379,10 +379,12 @@ class Dummy(sensor.Object):
     def get_report_time_delta(self):
         return REPORT_TIME
 
+# the real object base class
 class Object(sensor.Object):
     def __init__(self,hal,node):
         sensor.Object.__init__(self,hal,node)
 
+# analog pin connected thermometer
 # TODO attrs checks for each model of sensor
 # TODO test custom sensors
 class ADC(Object):
@@ -393,10 +395,10 @@ class ADC(Object):
     def configure(self):
         if self.ready:
             return
-        # non linear approximation (Steinhart-Hart)
+        # non linear approximation (Steinhart-Hart) probe
         if hasattr(self, "_inline"):
             self.probe = NonLinearResistance(self.name, self._pullup, self._inline, self._params)
-        # linear approximation (interpolation)
+        # linear approximation (interpolation) probe
         else:
             # standard, resistance
             if self._model in adc_resistance:
@@ -413,24 +415,28 @@ class ADC(Object):
             else:
                 # doesn't exist TODO an error message
                 raise
-        # register adc pin
-        self.pin = self.hal.get_controller().pin_setup("adc", self._pin)
-        self.pin.setup_callback(REPORT_TIME, self._cb)
+        #
+        self.pin[self._pin] = self.hal.get_controller().pin_setup("in_adc", self._pin)
+        self.pin[self._pin].setup_callback(REPORT_TIME, self._cb)
+        #
+        self.hal.get_controller().register_part(self.node())
         self.ready = True
     def register(self):
         # register thermometer
-        self.hal.get_controller().register_part(self.node())
+        pass
     def setup_minmax(self, min_temp, max_temp):
         adc_range = [self.probe.calc_adc(t) for t in [min_temp, max_temp]]
-        self.pin.setup_minmax(SAMPLE_TIME, SAMPLE_COUNT, minval=min(adc_range), maxval=max(adc_range), range_check_count=RANGE_CHECK_COUNT)
+        self.pin[self._pin].setup_minmax(SAMPLE_TIME, SAMPLE_COUNT, minval=min(adc_range), maxval=max(adc_range), range_check_count=RANGE_CHECK_COUNT)
     def setup_cb(self, temperature_callback):
         self.temperature_callback = temperature_callback
     def _cb(self, read_time, read_value):
-        temp = self.probe.calc_temp(read_value)
-        self.temperature_callback(read_time + SAMPLE_COUNT * SAMPLE_TIME, temp, self.name)
+        self.last = read_time + SAMPLE_COUNT * SAMPLE_TIME
+        self.value = self.probe.calc_temp(read_value)
+        self.temperature_callback(self.last, self.value, self.name)
     def get_report_time_delta(self):
         return REPORT_TIME
 
+# I2C bus connected thermometer
 # TODO
 class I2C(sensor.Object):
     def __init__(self, hal, node, params):
@@ -454,6 +460,7 @@ class I2C(sensor.Object):
     def get_report_time_delta(self):
         return REPORT_TIME
 
+# SPI bus connected thermometer
 # TODO
 class SPI(sensor.Object):
     def __init__(self, hal, node, params):
@@ -477,6 +484,7 @@ class SPI(sensor.Object):
     def get_report_time_delta(self):
         return REPORT_TIME
 
+# custom thermometer
 # TODO
 class Custom(sensor.Object):
     def __init__(self, hal, node, params):

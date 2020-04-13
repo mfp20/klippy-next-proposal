@@ -40,10 +40,12 @@ class Object(part.Object):
         gov = tcnode.object._control
         self.max_power = self._power_max
         if gov == "watermark" and self.max_power == 1.:
-            self.pin = self.hal.get_controller().pin_setup("digital_out", self._pin)
+            self.pin[self._pin] = self.hal.get_controller().pin_setup("out_digital", self._pin)
         else:
-            self.pin = self.hal.get_controller().pin_setup("pwm", self._pin)
+            self.pin[self._pin] = self.hal.get_controller().pin_setup("out_pwm", self._pin)
+        #
         self.hal.get_controller().register_part(self.node())
+        #
         self.ready = True
 
 def load_node_object(hal, node):

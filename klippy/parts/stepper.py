@@ -39,8 +39,8 @@ class MCU_stepper:
     def get_mcu(self):
         return self._mcu
     def get_name(self, short=False):
-        if short and self._name.startswith('stepper_'):
-            return self._name[8:]
+        if short and self._name.startswith("stepper "):
+            return self._name.split(" ")[1]
         return self._name
     # get/set if distances in radians instead of millimeters
     def units_in_radians(self, value = False):
@@ -64,9 +64,8 @@ class MCU_stepper:
     def _build_config(self):
         max_error = self._mcu.get_max_stepper_error()
         min_stop_interval = max(0., self._min_stop_interval - max_error)
-        self._mcu.add_config_cmd(
-            "config_stepper oid=%d step_pin=%s dir_pin=%s"
-            " min_stop_interval=%d invert_step=%d" % (self._oid, self._step_pin, self._dir_pin, self._mcu.seconds_to_clock(min_stop_interval), self._invert_step))
+        self._mcu.add_config_cmd("config_stepper oid=%d step_pin=%s dir_pin=%s min_stop_interval=%d invert_step=%d" % 
+            (self._oid, self._step_pin, self._dir_pin, self._mcu.seconds_to_clock(min_stop_interval), self._invert_step))
         self._mcu.add_config_cmd("reset_step_clock oid=%d clock=0" % (self._oid,), is_init=True)
         step_cmd_id = self._mcu.lookup_command_id("queue_step oid=%c interval=%u count=%hu add=%hi")
         dir_cmd_id = self._mcu.lookup_command_id("set_next_step_dir oid=%c dir=%c")
@@ -156,11 +155,6 @@ class MCU_stepper:
 # Stepper object
 #
 
-ATTRS = ("type", "step_distance")
-ATTRS_PINS = ("pin_step", "pin_dir", "pin_enable")
-ATTRS_I2C = ("pin_sda", "pin_scl", "addr")
-ATTRS_SPI = ("pin_miso", "pin_mosi", "pin_sck", "pin_cs")
-
 class Dummy(part.Object):
     def __init__(self, hal, node):
         part.Object.__init__(self, hal, node)
@@ -178,15 +172,24 @@ class Object(part.Object):
         self.metaconf["pin_step"] = {"t":"str"}
         self.metaconf["pin_dir"] = {"t":"str"}
         self.metaconf["step_distance"] = {"t":"float", "above":0.}
+        self.pin = {}
     def configure(self):
         if self.ready:
             return
         self.step_pin_params = self.hal.get_controller().pin_register(self._pin_step, can_invert=True)
         self.dir_pin_params = self.hal.get_controller().pin_register(self._pin_dir, can_invert=True)
         self.stepper = MCU_stepper(self.name, self.step_pin_params, self.dir_pin_params, self._step_distance)
+        # register pins
+        self.pin[self._pin_step] = self.pin[self._pin_dir] = self.stepper
+        # register part
         self.hal.get_controller().register_part(self.node())
+        #
         self.ready = True
 
+ATTRS = ("type", "step_distance")
+ATTRS_PINS = ("pin_step", "pin_dir", "pin_enable")
+ATTRS_I2C = ("pin_sda", "pin_scl", "addr")
+ATTRS_SPI = ("pin_miso", "pin_mosi", "pin_sck", "pin_cs")
 def load_node_object(hal, node):
     if node.attrs_check():
         if node.attrs["type"] == "pins":
@@ -312,8 +315,7 @@ class ForceMove:
         distance = self.gcode.get_float('DISTANCE', params)
         speed = self.gcode.get_float('VELOCITY', params, above=0.)
         accel = self.gcode.get_float('ACCEL', params, 0., minval=0.)
-        logging.info("FORCE_MOVE %s distance=%.3f velocity=%.3f accel=%.3f",
-                     stepper.get_name(), distance, speed, accel)
+        logging.info("FORCE_MOVE %s distance=%.3f velocity=%.3f accel=%.3f", stepper.get_name(), distance, speed, accel)
         self.force_enable(stepper)
         self.manual_move(stepper, distance, speed, accel)
     cmd_SET_KINEMATIC_POSITION_help = "Force a low-level kinematic position"

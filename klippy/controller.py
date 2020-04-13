@@ -1,10 +1,10 @@
-# - Pin name to pin number definitions
-# - Interface to Klipper micro-controller code
-# - Boards
-# - Multiple boards Controller
+# - Pins: pin definitions and management
+# - MCU: Interface to Klipper micro-controller code
+# - Board: mcu+pins+bus
+# - Controller: multiple board controller
 #
-# Copyright (C) 2016-2020  Kevin O'Connor <kevin@koconnor.net>
-# Copyright (C) 2019  Florian Heilmann <Florian.Heilmann@gmx.net>
+# Copyright (C) 2016-2020   Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2019    Florian Heilmann <Florian.Heilmann@gmx.net>
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -13,7 +13,6 @@ import re, logging, math, zlib, collections
 from messaging import msg
 from messaging import Kerr as error
 import part, composite, chelper, serialhdl, timing
-from parts.sensors.endstop import MCU_endstop
 
 ######################################################################
 # Pins
@@ -201,9 +200,17 @@ class Pins:
     # name to alias and back
     def alt(self, txt):
         if self.isid(txt):
-            return id2alias(txt)
+            return self.id2alias(txt)
         if self.isalias(txt): 
-            return alias2id(txt)
+            return self.alias2id(txt)
+        return None
+    def any2index(self, txt):
+        logging.info(txt)
+        logging.info(self.id)
+        if self.isid(txt):
+            return self.id2index(txt)
+        if self.isalias(txt): 
+            return self.alias2index(txt)
         return None
     # setters
     def set_id(self, index, name):
@@ -264,54 +271,12 @@ class Pins:
             for i in range(len(self.id)):
                 matrix.append(self.get_vector(i))
             return matrix
-    # adcs
-    def adc_register(self, name, adc):
-        # TODO check
-        if self.isname(name):
-            self.function[self.id2index(name)] = adc
-        elif self.isalias(name):
-            self.function[self.alias2index(name)] = adc
-        else:
-            error("ADC pin name '%s' not found.", name)
-    def adc_query(self, name):
-        # TODO check
-        if self.isname(name):
-            value, timestamp = self.id2function(name).get_last_value()        
-        elif self.isalias(name):
-            value, timestamp = self.alias2function(name).get_last_value()        
-        else:
-            error("ADC pin name '%s' not found.", name)
-        return (name, value, timestamp)
-
-#
-# Support for custom board pin aliases
-#
-# TODO
-class PinAliasCustom:
-    def __init__(self, config, chip_name):
-        ppins = config.get_printer().lookup_object('pins')
-        pin_resolver = ppins.get_pin_resolver(chip_name)
-        aliases = config.get("aliases").strip()
-        if aliases.endswith(','):
-            aliases = aliases[:-1]
-        parts = [a.split('=', 1) for a in aliases.split(',')]
-        for pair in parts:
-            if len(pair) != 2:
-                raise ppins.error("Unable to parse aliases in %s"
-                                  % (config.get_name(),))
-            name, value = [s.strip() for s in pair]
-            if value.startswith('<') and value.endswith('>'):
-                pin_resolver.reserve_pin(name, value)
-            else:
-                pin_resolver.alias_pin(name, value)
 
 ######################################################################
-# MCU
+# MCU pin_type's
 ######################################################################
 
-#
 # Code to configure miscellaneous chips
-#
 # TODO
 PIN_MIN_TIME = 0.100
 class MCU_pin_out:
@@ -359,67 +324,6 @@ class MCU_pin_out:
             self.mcu_pin.set_digital(print_time, value)
         self.last_value = value
         self.last_value_time = print_time
-
-#
-# Virtual pin that propagates its changes to multiple output pins
-#
-# TODO
-class MCU_pin_out_virtual:
-    def __init__(self, hal, name, pins):
-        self.hal = hal
-        try:
-            hal.get_controller().register_chip("multi_pin", self)
-        except error:
-            pass
-        self.pin_type = None
-        self.pin_list = [pin.strip() for pin in config.get("pins").split(',')]
-        self.mcu_pins = []
-    def setup_pin(self, pin_type, pin_params):
-        pin_name = pin_params["pin"]
-        pin = self.printer.lookup_object("multi_pin " + pin_name, None)
-        if pin is not self:
-            if pin is None:
-                raise error("multi_pin %s not configured" % (pin_name,))
-            return pin.setup_pin(pin_type, pin_params)
-        if self.pin_type is not None:
-            raise ppins.error("Can't setup multi_pin %s twice" % (pin_name,))
-        self.pin_type = pin_type
-        invert = ""
-        if pin_params["invert"]:
-            invert = "!"
-        self.mcu_pins = [ppins.setup_pin(pin_type, invert + pin_desc)
-                         for pin_desc in self.pin_list]
-        return self
-    def get_mcu(self):
-        return self.mcu_pins[0].get_mcu()
-    def setup_max_duration(self, max_duration):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_max_duration(max_duration)
-    def setup_start_value(self, start_value, shutdown_value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_start_value(start_value, shutdown_value)
-    def setup_cycle_time(self, cycle_time, hardware_pwm=False):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
-    def set_digital(self, print_time, value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.set_digital(print_time, value)
-    def set_pwm(self, print_time, value):
-        for mcu_pin in self.mcu_pins:
-            mcu_pin.set_pwm(print_time, value)
-
-#
-# Set the state of a list of digital output pins
-#
-# TODO
-class MCU_pin_out_multi:
-    def __init__(self, config):
-        printer = config.get_printer()
-        ppins = printer.lookup_object('pins')
-        pin_list = [pin.strip() for pin in config.get('pins').split(',')]
-        for pin_desc in pin_list:
-            mcu_pin = ppins.setup_pin('digital_out', pin_desc)
-            mcu_pin.setup_start_value(1, 1, True)
 
 #
 class MCU_pin_out_digital:
@@ -491,6 +395,7 @@ class MCU_pin_out_digital_queued:
             return
         self.update_pin_cmd.send([self.oid, not not value], minclock=minclock, reqclock=reqclock)
 
+#
 class MCU_pin_out_pwm:
     def __init__(self, mcu, pin_params):
         self._mcu = mcu
@@ -555,6 +460,13 @@ class MCU_pin_out_pwm:
         self._set_cmd.send([self._oid, clock, value], minclock=self._last_clock, reqclock=clock)
         self._last_clock = clock
 
+# TODO a general purpose digital sense pin, look at MCU_endstop for help
+# note: probably there's the need to add support in chelper
+class MCU_pin_in_digital:
+    def __init__(self, mcu, pin_params):
+        raise error("TODO MCU_pin_in_digital")
+
+#
 class MCU_pin_in_adc:
     def __init__(self, mcu, pin_params):
         self._mcu = mcu
@@ -604,30 +516,9 @@ class MCU_pin_in_adc:
         if self._callback is not None:
             self._callback(last_read_time, last_value)
 
-# SAMD based boards have six internal serial modules that can be configured individually.
-# Some are available for mapping onto specific pins. 
-# These interfaces are hardware based and can be I2Cs, UARTs or SPIs types.
-# TODO
-class MCU_samd_sercom:
-    def __init__(self, config):
-        self.printer = config.get_printer()
-        self.name = config.get_name().split()[1]
-        self.tx_pin = config.get("tx_pin")
-        self.rx_pin = config.get("rx_pin", None)
-        self.clk_pin = config.get("clk_pin")
-        ppins = self.printer.lookup_object("pins")
-        tx_pin_params = ppins.lookup_pin(self.tx_pin)
-        self.mcu = tx_pin_params['chip']
-        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=tx pin=%s" % (self.name, tx_pin_params['pin']))
-        clk_pin_params = ppins.lookup_pin(self.clk_pin)
-        if self.mcu is not clk_pin_params['chip']:
-           raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
-        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=clk pin=%s" % (self.name, clk_pin_params['pin']))
-        if self.rx_pin:
-            rx_pin_params = ppins.lookup_pin(self.rx_pin)
-            if self.mcu is not rx_pin_params['chip']:
-                raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
-            self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=rx pin=%s" % (self.name, rx_pin_params['pin']))
+######################################################################
+# MCU bus
+######################################################################
 
 # Helper code for working with devices connected to an MCU via an I2C bus
 class MCU_i2c:
@@ -718,6 +609,35 @@ class MCU_spi:
     def spi_transfer(self, data):
         return self.spi_transfer_cmd.send([self.oid, data])
 
+# SAMD based boards have six internal serial modules that can be configured individually.
+# Some are available for mapping onto specific pins. 
+# These interfaces are hardware based and can be I2Cs, UARTs or SPIs types.
+# TODO
+class MCU_samd_sercom:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.name = config.get_name().split()[1]
+        self.tx_pin = config.get("tx_pin")
+        self.rx_pin = config.get("rx_pin", None)
+        self.clk_pin = config.get("clk_pin")
+        ppins = self.printer.lookup_object("pins")
+        tx_pin_params = ppins.lookup_pin(self.tx_pin)
+        self.mcu = tx_pin_params['chip']
+        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=tx pin=%s" % (self.name, tx_pin_params['pin']))
+        clk_pin_params = ppins.lookup_pin(self.clk_pin)
+        if self.mcu is not clk_pin_params['chip']:
+           raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
+        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=clk pin=%s" % (self.name, clk_pin_params['pin']))
+        if self.rx_pin:
+            rx_pin_params = ppins.lookup_pin(self.rx_pin)
+            if self.mcu is not rx_pin_params['chip']:
+                raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
+            self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=rx pin=%s" % (self.name, rx_pin_params['pin']))
+
+######################################################################
+# MCU
+######################################################################
+
 # Class to retry sending of a query command until a given response is received
 class RetryAsyncCommand:
     TIMEOUT_TIME = 5.0
@@ -793,7 +713,6 @@ class MCU:
         self._clocksync = clocksync
         #
         self._reactor = self.hal.get_reactor()
-        # TODO bug each mcu must register a different handler!!!!
         self.hal.get_printer().register_event_handler("klippy:connect", self._connect)
         self.hal.get_printer().register_event_handler("klippy:mcu_identify", self._mcu_identify)
         self.hal.get_printer().register_event_handler("klippy:shutdown", self._shutdown)
@@ -893,22 +812,30 @@ class MCU:
             if not line:
                 continue
             self.add_config_cmd(line)
-    # applies pin_fixup to all "pin" occurrences in the given command
+    #
+    # applies pin_fixup and vector_fixup to all "pin" occurrences in the given command
     def command_translate(self, cmd):
+        # TODO remove fix_matrix, find a better way to setup the Pins matrix
+        def fix_matrix(pin_id, params):
+            indices = [i for i, x in enumerate(self._board.pins.id) if x == pin_id] 
+            for i in indices:
+                self._board.pins.function[i] = True
+                self._board.pins.invert[i] = params["invert"]
+                self._board.pins.pull[i] = params["pullup"]
         def pin_fixup(m):
             name = m.group('name')
-            if name in self._board.pin.alias:
-                pin_id = self._board.pin.alias2id(name)
-                pin_params = self._board.pin.active.pop(name)
+            if name in self._board.pins.alias:
+                pin_id = self._board.pins.alias2id(name)
+                pin_params = self._board.pins.active.pop(name)
                 pin_params["pin"] = pin_id
-                self._board.pin.active[pin_id] = pin_params
-                index = self._board.pin.alias.index(name)
-                self._board.pin.invert[index] = pin_params["invert"]
-                self._board.pin.pull[index] = pin_params["pullup"]
+                self._board.pins.active[pin_id] = pin_params
+                fix_matrix(pin_id,pin_params)
             else:
                 pin_id = name
-            if pin_id in self._board.pin.reserved:
-                raise error("pin %s is reserved for %s" % (name, self._board.pin.reserved[pin_id]))
+                pin_params = self._board.pins.active[name]
+                fix_matrix(pin_id,pin_params)
+            if pin_id in self._board.pins.reserved:
+                raise error("pin %s is reserved for %s" % (name, self._board.pins.reserved[pin_id]))
             return m.group('prefix') + str(pin_id)
         return self.re_pin.sub(pin_fixup, cmd)
     #
@@ -928,8 +855,7 @@ class MCU:
         self.add_config_cmd("finalize_config crc=%d" % (config_crc,))
         # Transmit config messages (if needed)
         if prev_crc is None:
-            logging.info("- Sending printer configuration to MCU '%s'.",
-                         self._name)
+            logging.info("- Sending printer configuration to MCU '%s'.", self._name)
             for c in self._config_cmds:
                 self._serial.send(c)
         elif config_crc != prev_crc:
@@ -939,9 +865,7 @@ class MCU:
         for c in self._init_cmds:
             self._serial.send(c)
     def _send_get_config(self):
-        get_config_cmd = self.lookup_query_command(
-            "get_config",
-            "config is_config=%c crc=%u move_count=%hu is_shutdown=%c")
+        get_config_cmd = self.lookup_query_command("get_config", "config is_config=%c crc=%u move_count=%hu is_shutdown=%c")
         if self.is_fileoutput():
             return { 'is_config': 0, 'move_count': 500, 'crc': 0 }
         config_params = get_config_cmd.send()
@@ -985,7 +909,7 @@ class MCU:
         log_info = self._log_info() + "\n" + move_msg
         self.hal.get_printer().set_rollover_info(self._name, log_info, log=False)
         # board configured
-        self.hal.get_printer().send_event("board:"+self._name+":configured")
+        self.hal.get_printer().send_event("mcu:"+self._name+":configured")
     def _mcu_identify(self):
         # load MCU
         if self.is_fileoutput():
@@ -1015,12 +939,19 @@ class MCU:
         self.register_response(self._handle_shutdown, 'is_shutdown')
         self.register_response(self._handle_mcu_stats, 'stats')
         # board identified
-        self.hal.get_printer().send_event("board:"+self._name+":identified", self._name)
-    # Config creation helpers
+        self.hal.get_printer().send_event("mcu:"+self._name+":identified", self._name)
+    # config creation helpers
     def setup_pin(self, pin_type, pin_params):
-        pcs = {'endstop': MCU_endstop, 'digital_out': MCU_pin_out_digital, 'pwm': MCU_pin_out_pwm, 'adc': MCU_pin_in_adc}
+        pcs = {
+                "out": MCU_pin_out, 
+                "out_digital": MCU_pin_out_digital, 
+                "out_digital_queued": MCU_pin_out_digital_queued, 
+                "out_pwm": MCU_pin_out_pwm, 
+                "in_digital": MCU_pin_in_digital,
+                "in_adc": MCU_pin_in_adc
+                }
         if pin_type not in pcs:
-            raise pins.error("pin type %s not supported on mcu" % (pin_type,))
+            raise error("Pin type '%s' not supported on mcu '%s' for pin '%s'." % (pin_type,self._name,pin_params["pin"]))
         return pcs[pin_type](self, pin_params)
     def create_oid(self):
         self._oid_count += 1
@@ -1159,7 +1090,7 @@ class MCU:
         self._disconnect()
 
 ######################################################################
-# Board := {mcu, pins, uart, i2c, spi, ...}
+# Board := {mcu, pins, UARTs, I2Cs, SPIs, ...}
 ######################################################################
 
 # TODO
@@ -1182,10 +1113,10 @@ class Board(part.Object):
         self.metaconf["custom"] = {"t": "str", "default":""}
         self.metaconf["max_stepper_error"] = {"t": "float", "minval":0., "default":0.000025}
         #
-        self.pin = Pins(self.hal, node)
-        self.uart = collections.OrderedDict()
-        self.i2c = collections.OrderedDict()
-        self.spi = collections.OrderedDict()
+        self.pins = Pins(self.hal, node)
+        self.uarts = collections.OrderedDict()
+        self.i2cs = collections.OrderedDict()
+        self.spis = collections.OrderedDict()
     def init_mcu(self):
         if self.hal.mcu_count == 0:
             self.mcu = MCU(self.hal, self, self.id(), self.hal.get_timing())
@@ -1194,13 +1125,13 @@ class Board(part.Object):
         self.hal.mcu_count = self.hal.mcu_count + 1
         self.ready = True
     def register(self):
-        self.hal.get_printer().register_event_handler("board:"+self.id()+":identified", self._identified)
-        self.hal.get_printer().register_event_handler("board:"+self.id()+":configured", self._configured)
+        self.hal.get_printer().register_event_handler("mcu:"+self.id()+":identified", self._handle_identified)
+        self.hal.get_printer().register_event_handler("mcu:"+self.id()+":configured", self._handle_configured)
     # events handlers
-    def _identified(self, mcuname):
+    def _handle_identified(self, mcuname):
         # init pins
         self.mcu._mcu_type = self.mcu._serial.get_msgparser().get_constant("MCU")
-        self.pin.map(self.mcu._mcu_type, self.mcu._pin_map)
+        self.pins.map(self.mcu._mcu_type, self.mcu._pin_map)
         # parse constants
         for cname, value in self.mcu.get_constants().items():
             # ex: RESERVE_PINS_serial
@@ -1220,9 +1151,9 @@ class Board(part.Object):
         #for s in spi:
         #    self.bus_pin_reserve()
         #    self.bus_setup_spi()
-    def _configured(self):
-        self.hal.get_printer().send_event("controller:ready")
-    #
+    def _handle_configured(self):
+        self.hal.get_printer().send_event("board:"+self.id()+":ready")
+    # returns pin_params from "pin"
     def pin_parse(self, pin_desc, can_invert=False, can_pullup=False):
         desc = pin_desc.strip()
         pullup = invert = 0
@@ -1243,32 +1174,57 @@ class Board(part.Object):
             raise error("Invalid pin description '%s'\nFormat is: %s[chip_name:] pin_name" % (pin_desc, format))
         pin_params = {'chip': self.mcu, 'chip_name': self.mcu._name, 'pin': desc, 'invert': invert, 'pullup': pullup}
         return pin_params
+    # register only
     def pin_register(self, pin_desc, can_invert=False, can_pullup=False, share_type=None):
         pin_params = self.pin_parse(pin_desc, can_invert, can_pullup)
-        pin = pin_params['pin']
+        pin = pin_params["pin"]
         share_name = pin
-        if share_name in self.pin.active:
-            share_params = self.pin.active[share_name]
+        if share_name in self.pins.active:
+            share_params = self.pins.active[share_name]
             if share_type is None or share_type != share_params['share_type']:
-                raise error("pin %s (%s) used multiple times in config" % (pin,self.pin.alt(pin)))
+                raise error("Pin %s (%s) used multiple times in config." % (pin,self.pins.alt(pin)))
             if (pin_params['invert'] != share_params['invert'] or pin_params['pullup'] != share_params['pullup']):
-                raise error("Shared pin %s must have same polarity" % (pin,))
+                raise error("Shared pin %s must have same polarity." % (pin,))
             return share_params
         pin_params['share_type'] = share_type
-        self.pin.active[share_name] = pin_params
+        self.pins.active[share_name] = pin_params
         return pin_params
+    # register&setup
     def pin_setup(self, pin_type, pin_desc):
-        can_invert = pin_type in ['endstop', 'digital_out', 'pwm']
-        can_pullup = pin_type in ['endstop']
+        # setup params
+        can_invert = pin_type in ["out_digital", "out_pwm"]
+        can_pullup = pin_type in []
         pin_params = self.pin_register(pin_desc, can_invert, can_pullup)
-        return pin_params['chip'].setup_pin(pin_type, pin_params)
+        #
+        return self.mcu.setup_pin(pin_type, pin_params)
+    #
     def pin_reserve(self, name, function):
-        if name in self.pin.reserved and self.pin.reserved[name] != function:
+        if name in self.pins.reserved and self.pins.reserved[name] != function:
             raise error("Pin %s reserved for %s - can't reserve for %s" % (name, self.pin.reserved[name], function))
-        self.pin.reserved[name] = function
+        self.pins.reserved[name] = function
+    #
     def pin_reset_sharing(self, pin_params):
         share_name = "%s" % (pin_params['chip_name'], pin_params['pin'])
-        del self.pin.active[share_name]
+        del self.pins.active[share_name]
+    # set the state of a single digital output
+    def pin_set_value(self, pin):
+        mcu_pin = self.pin_setup('out_digital', pin)
+        mcu_pin.setup_start_value(1, 1, True)
+    # set the state of a list of digital output pins
+    def pin_set_value_multi(self, pin_list):
+        for pin in pin_list:
+            self.pin_value(pin)
+    # report the last value of an analog pin
+    def pin_get_adc_value(self, pin):
+        # TODO check
+        if self.isname(name):
+            value, timestamp = self.pin.id2function(name).get_last_value()        
+        elif self.isalias(name):
+            value, timestamp = self.pin.alias2function(name).get_last_value()        
+        else:
+            error("ADC pin name '%s' not found.", name)
+        return (name, value, timestamp)
+    #
     def bus_pin_reserve(self, bus):
         reserve_pins = self.mcu.get_constants().get('BUS_PINS_%s' % (bus,), None)
         if reserve_pins is not None:
@@ -1310,36 +1266,139 @@ class Board(part.Object):
         # create spi
         self.spi[bus] = MCU_spi(self.mcu, bus, pin, mode, speed, sw_pins)
 
+# creates a virtual pin that propagates its changes to multiple output pins
+class VirtualPin(part.Object):
+    def __init__(self, hal, node):
+        part.Object.__init__(self,hal,node)
+        self.metaconf["pins"] = {"t":"str"}
+        self.pin_type = None
+        self.ready = True
+    def pin_setup(self, pin_type, pin_params):
+        if self.pin_type is not None:
+            return self
+        #
+        self._pins = self._pins.split(",")
+        self.pin_type = pin_type
+        pin_list = [pin.strip() for pin in self._pins]
+        for pin in self._pins:
+            self.pin[pin] = self.hal.get_controller().pin_setup(pin_type, pin)
+        return self
+    def get_mcu(self):
+        return self.mcu_pins[0].get_mcu()
+    def setup_max_duration(self, max_duration):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_max_duration(max_duration)
+    def setup_start_value(self, start_value, shutdown_value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_start_value(start_value, shutdown_value)
+    def setup_cycle_time(self, cycle_time, hardware_pwm=False):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
+    def set_digital(self, print_time, value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.set_digital(print_time, value)
+    def set_pwm(self, print_time, value):
+        for mcu_pin in self.mcu_pins:
+            mcu_pin.set_pwm(print_time, value)
+
 ######################################################################
-# Controller: multiboard mapper (was "PrinterPins")
+# Controller: multiboard mapper
 ######################################################################
 
 class Object(composite.Object):
     def __init__(self, hal, node):
         composite.Object.__init__(self,hal,node)
+        #
         self.board = {}
         self.board_ready = 0
-        self.endstop = {}
-        self.thermometer = {}
-        self.hygrometer = {}
-        self.barometer = {}
-        self.filament = {}
-        self.stepper = {}
-        self.heater = {}
-        self.cooler = {}
+        self.virtual = collections.OrderedDict()
+        self.endstop = collections.OrderedDict()
+        self.thermometer = collections.OrderedDict()
+        self.hygrometer = collections.OrderedDict()
+        self.barometer = collections.OrderedDict()
+        self.filament = collections.OrderedDict()
+        self.stepper = collections.OrderedDict()
+        self.heater = collections.OrderedDict()
+        self.cooler = collections.OrderedDict()
+        #
         self.ready = True
     def register(self):
-        self.hal.get_printer().register_event_handler("controller:ready", self._ready)
+        for b in self.board:
+            self.hal.get_printer().register_event_handler("board:"+b+":ready", self._handle_ready)
         self.hal.get_commander().register_command('SHOW_PINS_ALL', self.cmd_SHOW_PINS_ALL, desc=self.cmd_SHOW_PINS_ALL_help)
         self.hal.get_commander().register_command('SHOW_PINS_ACTIVE', self.cmd_SHOW_PINS_ACTIVE, desc=self.cmd_SHOW_PINS_ACTIVE_help)
         self.hal.get_commander().register_command("SHOW_ADC_VALUE", self.cmd_SHOW_ADC_VALUE, desc=self.cmd_SHOW_ADC_VALUE_help)
         self.hal.get_commander().register_command("SHOW_ENDSTOPS", self.cmd_SHOW_ENDSTOPS, desc=self.cmd_SHOW_ENDSTOPS_help)
         #gcode.register_command("M119", self.cmd_SHOW_ENDSTOPS)
-    # (un)register parts
+    # events handlers
+    def _handle_ready(self):
+        self.board_ready = self.board_ready + 1
+        if self.board_ready == self.hal.mcu_count:
+            self.hal.ready()
+        elif self.board_ready > self.hal.mcu_count:
+            raise error("Controller: too many ready MCUs.")
+    # setup custom pin aliases
+    # TODO
+    def setup_custom_alias(self, aliases):
+        if aliases.endswith(','):
+            aliases = aliases[:-1]
+        parts = [a.split('=', 1) for a in aliases.split(',')]
+        for pair in parts:
+            if len(pair) != 2:
+                raise error("Unable to parse aliases in %s" % (config.get_name(),))
+            name, value = [s.strip() for s in pair]
+            if value.startswith('<') and value.endswith('>'):
+                pin_resolver.reserve_pin(name, value)
+            else:
+                pin_resolver.alias_pin(name, value)
+    # return the pin name part of "board:pin"
+    def _b(self, pin):
+        return pin.split(":")[0]
+    # return the board name part of "board:pin"
+    def _p(self, pin):
+        return pin.split(":")[1]
+    # return the board object from "board:pin"
+    def _board(self, pin):
+        return self.board[self._b(pin)]
+    # returns the mcu object from "board:pin"
+    def _mcu(self, pin):
+        return self._board(pin).mcu
+    # return a list of all registered boards
+    def board_list(self):
+        boards = list()
+        for b in self.board:
+            boards.append(self.board[b])
+        return boards
+    # return a list of all registered mcus
+    def mcu_list(self):
+        mcus = list()
+        for b in self.board:
+            mcus.append(self.board[b].mcu)
+        return mcus
+    # return a dict of all available pins and their status
+    def pin_dict(self):
+        pins = collections.OrderedDict()
+        for b in self.board:
+            pins[b] = self.board[b].pin.matrix()
+        return pins
+    # return a dict of all active pins and their status
+    def pin_active_dict(self):
+        active = collections.OrderedDict()
+        for b in self.board:
+            active[b] = self.board[b].pin.active
+        return active
+    # wrappers to call board's methods, pin is "board:pin"
+    def pin_register(self, pin, can_invert=False, can_pullup=False, share_type=None):
+        return self._board(pin).pin_register(self._p(pin), can_invert, can_pullup, share_type)
+    def pin_setup(self, pin_type, pin):
+        if self._b(pin) == "virtual":
+            return self.virtual["virtual "+self._p(pin)].pin_setup(pin_type,{'chip': None, 'chip_name': self._b(pin), 'pin': self._p(pin), 'invert': False, 'pullup': False})
+        return self._board(pin).pin_setup(pin_type, self._p(pin))
+    # (un)registers parts
     def register_part(self, node, remove = False):
         if remove:
             # delete
-            for parts in [self.board, self.endstop, self.thermometer, self.hygrometer, self.barometer, self.filament, self.stepper, self.heater, self.cooler]:
+            for parts in [self.board, self.virtual, self.endstop, self.thermometer, self.hygrometer, self.barometer, self.filament, self.stepper, self.heater, self.cooler]:
                 if node.name in parts:
                     parts.pop(node.name)
                     return
@@ -1353,6 +1412,8 @@ class Object(composite.Object):
                 self.board[bname] = node.object = Board(self.hal, node)
                 node.attrs2obj()
                 self.board[bname].init_mcu()
+            elif node.name.startswith("virtual "):
+                self.virtual[node.name] = node.object = VirtualPin(self.hal,node)
             elif node.name.startswith("sensor "):
                 if node.attr("type") == "endstop":
                     self.endstop[node.name] = node.object
@@ -1372,44 +1433,13 @@ class Object(composite.Object):
                 self.cooler[node.name] = node.object
             else:
                 raise error("Unknown group for part '%s'. Can't register in controller.", name)
-    # events handlers
-    def _ready(self):
-        self.board_ready = self.board_ready + 1
-        if self.board_ready == self.hal.mcu_count:
-            self.hal.ready()
-        elif self.board_ready > self.hal.mcu_count:
-            raise error("Controller: too many ready MCUs.")
-    #
-    def list_mcus(self):
-        mcus = list()
-        for b in self.board:
-            mcus.append(self.board[b].mcu)
-        return mcus
-    def pin_register(self, pin_desc, can_invert=False, can_pullup=False, share_type=None):
-        bname = pin_desc.split(":")[0]
-        pname = pin_desc.split(":")[1]
-        return self.board[bname].pin_register(pname, can_invert, can_pullup, share_type)
-    def pin_setup(self, pin_type, pin_desc):
-        bname = pin_desc.split(":")[0]
-        pname = pin_desc.split(":")[1]
-        return self.board[bname].pin_setup(pin_type, pname)
-    def pin_matrix(self):
-        pins = collections.OrderedDict()
-        for b in self.board:
-            pins[b] = self.board[b].pin.matrix()
-        return pins
     # commands handlers
     cmd_SHOW_PINS_ALL_help = "Shows all pins."
     def cmd_SHOW_PINS_ALL(self):
-        self.hal.get_gcode().respond_info(self.pin_matrix(), log=False)
-    def pin_matrix_active(self):
-        active = collections.OrderedDict()
-        for b in self.board:
-            active[b] = self.board[b].pin.active
-        return active
+        self.hal.get_gcode().respond_info(self.pin_dict(), log=False)
     cmd_SHOW_PINS_ACTIVE_help = "Shows active pins."
     def cmd_SHOW_PINS_ACTIVE(self):
-        self.hal.get_gcode().respond_info(self.pin_matrix_active(), log=False)
+        self.hal.get_gcode().respond_info(self.pin_active_dict(), log=False)
     cmd_SHOW_ADC_VALUE_help = "Report the last value of an analog pin"
     def cmd_SHOW_ADC_VALUE(self, params):
         # TODO
@@ -1447,4 +1477,6 @@ def load_node_object(hal, node):
             hal.get_controller().register_part(node)
         else:
             node.object = Dummy(hal, node)
+    elif node.name.startswith("virtual "):
+        hal.get_controller().register_part(node)
 

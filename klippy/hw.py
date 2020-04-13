@@ -22,7 +22,7 @@ class Manager:
         self.tree.printer.children["hal"].object = self
         self.tree.printer.child_set(tree.PrinterNode("reactor"))
         self.node("reactor").object = reactor.Reactor(self, self.node("reactor"))
-        self.pgroups = ["mcu", "sensor", "stepper", "heater", "cooler", "nozzle"]
+        self.pgroups = ["mcu", "virtual", "sensor", "stepper", "heater", "cooler", "nozzle"]
         self.cgroups = ["tool", "cart", "rail"]
         self.mcu_count = 0
     def register(self):
@@ -32,7 +32,7 @@ class Manager:
     def add_cgroup(self, cgroup):
         self.cgroups.append(cgroup)
     def load_tree_objects(self):
-        #logging.debug(self.show(plus="module"))
+        #logging.debug(self.show(plus="module,details"))
         logging.info("- Loading printer objects.")
         # load commander
         self.node("commander").object = self.node("commander").module.Dispatch(self, self.node("commander"))
@@ -101,7 +101,7 @@ class Manager:
         # load printer's sniplets, development code to be tested
         logging.info("- Autoloading extra printlets.")
         self.get_printer().autoload(self)
-        logging.debug(self.show(plus="object"))
+        #logging.debug(self.show(plus="object"))
     def node(self, name):
         if name == "printer":
             return self.tree.printer

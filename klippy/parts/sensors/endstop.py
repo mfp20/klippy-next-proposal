@@ -12,13 +12,13 @@ from parts import sensor
 # Interface to low-level mcu and chelper code
 class MCU_endstop:
     RETRY_QUERY = 1.000
-    def __init__(self, mcu, pin_params):
-        self._mcu = mcu
+    def __init__(self, reactor, pin_params):
+        self._pin = pin_params["pin"]
+        self._mcu = pin_params["chip"]
+        self._pullup = pin_params["pullup"]
+        self._invert = pin_params["invert"]
         self._steppers = []
-        self._pin = pin_params['pin']
-        self._pullup = pin_params['pullup']
-        self._invert = pin_params['invert']
-        self._reactor = mcu.get_printer().get_reactor()
+        #
         self._oid = self._home_cmd = self._requery_cmd = self._query_cmd = None
         self._mcu.register_config_callback(self._build_config)
         self._min_query_time = self._last_sent_time = 0.
@@ -28,7 +28,7 @@ class MCU_endstop:
         return self._mcu
     def add_stepper(self, stepper):
         if stepper.get_mcu() is not self._mcu:
-            raise pins.error("Endstop and stepper must be on the same mcu")
+            raise error("Endstop and stepper must be on the same mcu.")
         if stepper in self._steppers:
             return
         self._steppers.append(stepper)
@@ -36,28 +36,15 @@ class MCU_endstop:
         return list(self._steppers)
     def _build_config(self):
         self._oid = self._mcu.create_oid()
-        self._mcu.add_config_cmd(
-            "config_endstop oid=%d pin=%s pull_up=%d stepper_count=%d" % (
-                self._oid, self._pin, self._pullup, len(self._steppers)))
-        self._mcu.add_config_cmd(
-            "endstop_home oid=%d clock=0 sample_ticks=0 sample_count=0"
-            " rest_ticks=0 pin_value=0" % (self._oid,), is_init=True)
+        self._mcu.add_config_cmd("config_endstop oid=%d pin=%s pull_up=%d stepper_count=%d" % (self._oid, self._pin, self._pullup, len(self._steppers)))
+        self._mcu.add_config_cmd("endstop_home oid=%d clock=0 sample_ticks=0 sample_count=0 rest_ticks=0 pin_value=0" % (self._oid,), is_init=True)
         for i, s in enumerate(self._steppers):
-            self._mcu.add_config_cmd(
-                "endstop_set_stepper oid=%d pos=%d stepper_oid=%d" % (
-                    self._oid, i, s.get_oid()), is_init=True)
+            self._mcu.add_config_cmd("endstop_set_stepper oid=%d pos=%d stepper_oid=%d" % (self._oid, i, s.get_oid()), is_init=True)
         cmd_queue = self._mcu.alloc_command_queue()
-        self._home_cmd = self._mcu.lookup_command(
-            "endstop_home oid=%c clock=%u sample_ticks=%u sample_count=%c"
-            " rest_ticks=%u pin_value=%c", cq=cmd_queue)
-        self._requery_cmd = self._mcu.lookup_command(
-            "endstop_query_state oid=%c", cq=cmd_queue)
-        self._query_cmd = self._mcu.lookup_query_command(
-            "endstop_query_state oid=%c",
-            "endstop_state oid=%c homing=%c pin_value=%c", oid=self._oid,
-            cq=cmd_queue)
-    def home_start(self, print_time, sample_time, sample_count, rest_time,
-                   triggered=True):
+        self._home_cmd = self._mcu.lookup_command("endstop_home oid=%c clock=%u sample_ticks=%u sample_count=%c rest_ticks=%u pin_value=%c", cq=cmd_queue)
+        self._requery_cmd = self._mcu.lookup_command("endstop_query_state oid=%c", cq=cmd_queue)
+        self._query_cmd = self._mcu.lookup_query_command("endstop_query_state oid=%c","endstop_state oid=%c homing=%c pin_value=%c", oid=self._oid, cq=cmd_queue)
+    def home_start(self, print_time, sample_time, sample_count, rest_time, triggered=True):
         clock = self._mcu.print_time_to_clock(print_time)
         rest_ticks = self._mcu.print_time_to_clock(print_time+rest_time) - clock
         self._next_query_print_time = print_time + self.RETRY_QUERY
@@ -65,14 +52,9 @@ class MCU_endstop:
         self._last_sent_time = 0.
         self._home_end_time = self._reactor.NEVER
         self._trigger_completion = self._reactor.completion()
-        self._mcu.register_response(self._handle_endstop_state,
-                                    "endstop_state", self._oid)
-        self._home_cmd.send(
-            [self._oid, clock, self._mcu.seconds_to_clock(sample_time),
-             sample_count, rest_ticks, triggered ^ self._invert],
-            reqclock=clock)
-        self._home_completion = self._reactor.register_callback(
-            self._home_retry)
+        self._mcu.register_response(self._handle_endstop_state, "endstop_state", self._oid)
+        self._home_cmd.send([self._oid, clock, self._mcu.seconds_to_clock(sample_time), sample_count, rest_ticks, triggered ^ self._invert], reqclock=clock)
+        self._home_completion = self._reactor.register_callback(self._home_retry)
         return self._trigger_completion
     def _handle_endstop_state(self, params):
         logging.debug("endstop_state %s", params)
@@ -141,9 +123,17 @@ class Object(sensor.Object):
     def configure(self):
         if self.ready:
             return
-        self.sensor = self.hal.get_controller().pin_setup("endstop", self._pin)
+        # create probe
+        self.probe = MCU_endstop(self.hal.get_reactor(), self.hal.get_controller().pin_register(self._pin, can_invert=True, can_pullup=True))
+        # register pin
+        self.pin[self._pin] = self.probe
+        # register part
         self.hal.get_controller().register_part(self.node())
+        #
         self.ready = True
+    def read(self):
+        self.value = self.probe.query_endstop(self.reactor.monotonic())
+        return self.value
 
 ATTRS = ("type", "pin")
 def load_node_object(hal, node):

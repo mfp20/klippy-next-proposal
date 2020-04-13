@@ -39,10 +39,12 @@ class Object(part.Object):
         tcnode = self.node().parent(self.hal.tree.printer, self.name)
         gov = tcnode.object._control
         if gov == "watermark" and self._power_max == 1.:
-            self.pin = self.hal.get_controller().pin_setup("digital_out", self._pin)
+            self.pin[self._pin] = self.hal.get_controller().pin_setup("out_digital", self._pin)
         else:
-            self.pin = self.hal.get_controller().pin_setup("pwm", self._pin)
+            self.pin[self._pin] = self.hal.get_controller().pin_setup("out_pwm", self._pin)
+        #
         self.hal.get_controller().register_part(self.node())
+        #
         self.ready = True
 
 ATTRS = ("type", "pin",)

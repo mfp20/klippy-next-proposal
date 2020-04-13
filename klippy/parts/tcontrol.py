@@ -216,7 +216,7 @@ class Object(composite.Object):
             if self._pwm_cycle_time > self.pwm_delay:
                 self._pwm_cycle_time = self.pwm_delay
             node.object.pin.setup_cycle_time(pwm_cycle_time)
-        node.object.pin.setup_max_duration(MAX_HEAT_TIME)
+        node.object.pin[node.object._pin].setup_max_duration(MAX_HEAT_TIME)
         # set defaults
         self.heater[node.name] = OBJ.copy()
         self.heater[node.name]["pin"] = node.object

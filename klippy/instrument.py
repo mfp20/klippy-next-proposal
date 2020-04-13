@@ -233,7 +233,7 @@ class Object(composite.Object):
         self.gcode = self.hal.get_gcode(self.id())
         self.kin = self.hal.get_kinematic(self.id())
         self.reactor = self.hal.get_reactor()
-        self.all_mcus = self.hal.get_controller().list_mcus()
+        self.all_mcus = self.hal.get_controller().mcu_list()
         self.mcu = self.all_mcus[0]
         self.can_pause = True
         if self.mcu.is_fileoutput():

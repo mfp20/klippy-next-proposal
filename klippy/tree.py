@@ -43,73 +43,79 @@ class PrinterNode:
     def show_printer(self, node = None, indent = 0):
         if node == None: node = self
         txt = ""
-        for e,c in sorted(node.events.items()):
-            txt = txt + str('\t' * (indent+1) + "(event) " + str(e).ljust(30, " ") + str(c) + "\n")
+        txt = "\t"*(indent+1) + "--------------------- (events)\n"
+        for e in sorted(node.object.event_handlers):
+            methparts = str(node.object.event_handlers[e]).split(".",1)[1].split("instance", 1)[0].split(" ")
+            meth = methparts[2] + "." + methparts[0]
+            txt = txt + str('\t' * (indent+1) + "- " + str(e).ljust(30, " ") + meth[1:] + "\n")
         return txt
     def show_commander(self, node = None, indent = 0):
         if node == None: node = self
-        txt = ""
+        txt = "\t"*(indent+2) + "------------------- (commands)\n"
         for cmd in sorted(node.object.command_handler.keys()):
-            txt = txt + str('\t' * (indent+2) + "(command) " + str(cmd).ljust(20, " ")) 
+            txt = txt + str('\t' * (indent+2) + "- " + str(cmd).ljust(20, " ")) 
             if cmd in node.object.ready_only:
                 txt = txt + " (ready only)"
             txt = txt + "\n"
         for cmder in node.object.commander:
             txt = txt + str('\t' * (indent+1) + "- " + str(cmder).ljust(20, " ")+"\n")
+            txt = txt + "\t"*(indent+2) + "------------------- (commands)\n"
             for cmd in sorted(node.object.commander[cmder].command_handler.keys()):
-                txt = txt + str('\t' * (indent+2) + "(command) " + str(cmd).ljust(20, " ")) 
+                txt = txt + str('\t' * (indent+2) + "- " + str(cmd).ljust(20, " ")) 
                 if cmd in node.object.commander[cmder].ready_only:
                     txt = txt + " (ready only)"
                 txt = txt + "\n"
         return txt
     def show_hal(self, node = None, indent = 0):
         if node == None: node = self
-        txt = ""
-        partlist = self.children_names_deep()
-        partlist = list(dict.fromkeys(partlist))
-        partlist.sort()
-        for partname in sorted(partlist):
-            txt = txt + str('\t' * (indent+1) + "(node) " + str(partname) + "\n")
+        txt = "\t"*(indent+1) + "----------------- (tree nodes)\n"
+        node = self.children_deep()
+        nodedict = {}
+        for n in node:
+            nodedict[n.name] = n
+        for n in sorted(nodedict):
+            txt = txt + '\t' * (indent+1) + "- " + str(n).ljust(20, " ") + " " + str(nodedict[n].object).split(" ")[0][1:] + "\n"
         return txt
     def show_controller(self, node = None, indent = 0):
         if node == None: node = self
-        txt = "\t"*(indent+1) + "----------- (registered parts)\n"
-        for b in node.object.board:
-            txt = txt + "\t" * (indent+1) + "(board) " + b + " | " + str(node.object.board[b]) + "\n"
-        for p in node.object.endstop:
-            txt = txt + "\t" * (indent+1) + "(endstop) " + str(p) + " | " + str(node.object.endstop[p]) + "\n"
-        for p in node.object.thermometer:
-            txt = txt + "\t" * (indent+1) + "(thermometer) " + str(p) + " | " + str(node.object.thermometer[p]) + "\n"
-        for p in node.object.hygrometer:
-            txt = txt + "\t" * (indent+1) + "(hygrometer) " + str(p) + " | " + str(node.object.hygrometer[p]) + "\n"
-        for p in node.object.barometer:
-            txt = txt + "\t" * (indent+1) + "(barometer) " + str(p) + " | " + str(node.object.barometer[p]) + "\n"
-        for p in node.object.filament: 
-            txt = txt + "\t" * (indent+1) + "(filament) " + str(p) + " | " + str(node.object.filament[p]) + "\n"
-        for p in node.object.stepper: 
-            txt = txt + "\t" * (indent+1) + "(stepper) " + str(p) + " | " + str(node.object.stepper[p]) + "\n"
-        for p in node.object.heater: 
-            txt = txt + "\t" * (indent+1) + "(heater) " + str(p) + " | " + str(node.object.heater[p]) + "\n"
-        for p in node.object.cooler:
-            txt = txt + "\t" * (indent+1) + "(cooler) " + str(p) + " | " + str(node.object.cooler[p]) + "\n"
+        txt = "\t"*(indent+1) + "\t(part)\t\t\t(pin type)\t\t\t(used pin)\n"
+        used = []
+        for kind in [node.object.virtual, 
+                node.object.endstop, 
+                node.object.thermometer, 
+                node.object.hygrometer, 
+                node.object.barometer, 
+                node.object.filament, 
+                node.object.stepper, 
+                node.object.heater,
+                node.object.cooler]:
+            for part in sorted(kind):
+                for pin in sorted(kind[part].pin):
+                    used.append((part, pin, kind[part].pin[pin]))
+        for part, pin, obj in sorted(used):
+            txt = txt + "\t" * (indent+1) + "- " + part.ljust(20, " ") + " " + str(obj).split(" ")[0][1:].ljust(40, " ") + " " + pin + "\n"
         return txt
     def show_mcu(self, node = None, indent = 0):
         if node == None: node = self
         txt = ""
-        matrix = node.object.pin.get_matrix()
         # registered serial handlers
         if len(node.object.mcu._serial.handlers) > 0:
             txt = txt + "\t"*(indent+1) + "------------ (serial handlers)\n"
             txt = txt + "\t"*indent + "\t(name, oid)\t\t(callback)\n"
             for h in sorted(node.object.mcu._serial.handlers):
-                txt = txt + str("\t" * indent + "\t" + str(h).ljust(20, " ") + "\t" + str(node.object.mcu._serial.handlers[h]) + "\n")
+                hparts = str(node.object.mcu._serial.handlers[h]).split(" ")
+                hname = hparts[2]
+                txt = txt + str("\t" * indent + "\t" + str(h).ljust(20, " ") + "\t" + hname + "\n")
         # available pins and their config
+        matrix = node.object.pins.get_matrix()
         if len(matrix) > 0:
             txt = txt + "\t"*(indent+1) + "------------------- (all pins)\n"
-            txt = txt + "\t"*indent + "\t(pin)\t(alias)\t(task)\t(pull)\t(invert)\n"
+            txt = txt + "\t"*indent + "\t(pin)\t(alias)\t(pull)\t(invert)\t(used)\n"
             for p in sorted(matrix):
-                txt = txt + str("\t" * indent + "\t  " + str(p[0]) + "\t" + str(p[1]) + "\t" + str(p[2]) + "\t" + str(p[3]) + "\t" + str(p[4]) + "\n")
-            txt = txt + "\t"*(indent+1) + "------------------------------\n"
+                if not p[2]:
+                    p[2] = False
+                txt = txt + str("\t" * indent + "\t  " + str(p[0]) + "\t" + str(p[1]) + "\t" + str(p[3]) + "\t" + str(p[4]) + "\t\t" + str(p[2]) + "\n")
+        txt = txt + "\t"*(indent+1) + "------------------------------\n"
         return txt
     def show_deep(self, node = None, indent = 0, plus = ""):
         if node == None: node = self
@@ -364,7 +370,6 @@ class PrinterNode:
 class PrinterTree:
     def __init__(self): 
         self.printer = PrinterNode("printer")
-        self.printer.events = collections.OrderedDict()
         self.spare = PrinterNode("spares")
     def show(self, indent = 0, plus = ""):
         return self.printer.show_deep(self.printer, indent, plus) + "\n" + self.printer.show(self.spare, indent)

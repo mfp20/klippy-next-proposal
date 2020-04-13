@@ -126,7 +126,7 @@ class Main:
         run_result = self.run_result
         try:
             if run_result == 'firmware_restart':
-                for m in self.hw.get_controller().list_mcus():
+                for m in self.hw.get_controller().mcu_list():
                     m.microcontroller_restart()
             self.send_event("klippy:disconnect")
         except:
@@ -147,7 +147,6 @@ class Main:
             (lambda e: self.invoke_shutdown(message)))
     def register_event_handler(self, event, callback):
         self.event_handlers.setdefault(event, []).append(callback)
-        self.hw.tree.printer.events[event] = callback
     def send_event(self, event, *params):
         return [cb(*params) for cb in self.event_handlers.get(event, [])]
     def request_exit(self, result):
@@ -225,9 +224,10 @@ class Composer:
             for s in config.get_prefix_sections(p+" "):
                 part = tree.PrinterNode(s.get_name())
                 for k in s.fileconfig.options(s.get_name()):
-                    for a in s.get(k).split(","):
-                        part.attr_set(k, a)
+                    part.attr_set(k, s.get(k))
                 if p == "mcu":
+                    part.module = importlib.import_module("controller")
+                elif p == "virtual":
                     part.module = importlib.import_module("controller")
                 elif p == "sensor":
                     part.module = importlib.import_module("parts.sensors."+config.getsection(s.get_name()).get("type"))
@@ -277,6 +277,9 @@ class Composer:
                     partnames_to_remove = partnames_to_remove.union(self.compose_toolhead(config.get_prefix_sections(a+" "+n)[0], parts))
             else:
                 hal.tree.printer.attrs[a] = config.get(a)
+        for p in parts:
+            if p.startswith("virtual "):
+                hal.node("controller").children[p] = parts.pop(p)
         # adding plugins nodes
         for m in config.get_prefix_extra_sections(self.pgroups+self.cgroups):
             if m.get_name() in parts:

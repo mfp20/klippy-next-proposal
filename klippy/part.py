@@ -1,5 +1,12 @@
 # Printer simple part base class.
 #
+# Each part have:
+# - pin: dict of pins used
+# - _show_methods(): developer utility to check available methods of an instance
+# - group(): returns the first part of its own name := "group id"
+# - id(): returns the second part of its own name := "group id"
+# - node(): returns its own node (if any)
+# 
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -18,6 +25,9 @@ class Object():
         else:
             if not hasattr(self, "name"):
                 self.name = "object anonymous"
+        #
+        self.pin = {}
+        #
         self.ready = False
     def _show_methods(self):
         logging.info("NODE '%s' OBJ '%s'", self.node().name, self)
