@@ -164,10 +164,20 @@ class Manager(part.Object):
         self.ready = True
         #self.printer.try_load_module(config, "verify_heater %s" % (self.name,))
     def register(self):
-        self.hal.get_printer().register_event_handler("controller:request_restart", self._off_all_controls)
+        self.hal.get_printer().register_event_handler("commander:request_restart", self._event_handler_off_all_actuators)
         self.hal.get_commander().register_command("TEMPERATURE_HEATERS_OFF", self.cmd_TEMPERATURE_HEATERS_OFF, desc=self.cmd_TEMPERATURE_HEATERS_OFF_help)
         self.hal.get_commander().register_command("TEMPERATURE_COOLERS_OFF", self.cmd_TEMPERATURE_COOLERS_OFF, desc=self.cmd_TEMPERATURE_COOLERS_OFF_help)
-        self.hal.get_commander().register_command("TEMPERATURE_CONTROL_OFF", self.cmd_TEMPERATURE_CONTROL_OFF, desc=self.cmd_TEMPERATURE_CONTROL_OFF_help)
+        self.hal.get_commander().register_command("TEMPERATURE_OFF", self.cmd_TEMPERATURE_OFF, desc=self.cmd_TEMPERATURE_OFF_help)
+    # handlers
+    def _command_handler_off_all_heaters(self, print_time=0.):
+        for tcontrol in self.tcontroller.values():
+            tcontrol.set_off_heaters()
+    def _command_handler_off_all_coolers(self, print_time=0.):
+        for tcontrol in self.tcontroller.values():
+            tcontrol.set_off_coolers()
+    def _event_handler_off_all_actuators(self, print_time=0.):
+        self._command_handler_off_all_heaters()
+        self._command_handler_off_all_coolers()
     # (un)register temperature controller to the given commander
     def tc_register(self, tc, gcode=None):
         # unregister
@@ -200,16 +210,7 @@ class Manager(part.Object):
         return tc.get_temp(self.hal.get_reactor().monotonic(), sensor)
     def set_target_temp(tcname, temp):
         self.get_tc(tcname).set_temp(temp)
-    # commands handlers
-    def _off_all_heaters(self, print_time=0.):
-        for tcontrol in self.tcontroller.values():
-            tcontrol.set_off_heaters()
-    def _off_all_coolers(self, print_time=0.):
-        for tcontrol in self.tcontroller.values():
-            tcontrol.set_off_coolers()
-    def _off_all_controls(self, print_time=0.):
-        self._off_all_heaters()
-        self._off_all_coolers()
+    # commands
     cmd_SET_TEMPERATURE_help = "Sets the temperature for the given controller"
     def cmd_SET_TEMPERATURE(self, params):
         # TODO
@@ -222,9 +223,9 @@ class Manager(part.Object):
     cmd_TEMPERATURE_COOLERS_OFF_help = "Turn off all coolers"
     def cmd_TEMPERATURE_COOLERS_OFF(self, params):
         self._off_all_coolers()
-    cmd_TEMPERATURE_CONTROL_OFF_help = "Turn off all controls (heaters and coolers included)"
-    def cmd_TEMPERATURE_CONTROL_OFF(self, params):
-        self._off_all_controls()
+    cmd_TEMPERATURE_OFF_help = "Turn off all temperature actuators (ie: heaters and coolers)"
+    def cmd_TEMPERATURE_OFF(self, params):
+        self._event_handler_off_all_actuators()
     def get_status(self, eventtime):
         # TODO
         return {'available_heaters': self.available_heaters, 'available_sensors': self.available_sensors}

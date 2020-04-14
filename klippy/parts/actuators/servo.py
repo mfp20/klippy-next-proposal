@@ -4,11 +4,29 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
+import logging
+from messaging import msg
+from messaging import Kerr as error
+from parts import actuator
+
 SERVO_SIGNAL_PERIOD = 0.020
 PIN_MIN_TIME = 0.100
 
-class PrinterServo:
+class Dummy(actuator.Object):
+    def __init__(self, hal, node):
+        part.Object.__init__(self, hal, node)
+        logging.warning("(%s) servo.Dummy", self.name)
+    def configure():
+        if self.ready:
+            return
+        # TODO 
+        self.ready = True
+
+# TODO
+class Object(actuator.Object):
     def __init__(self, config):
+        part.Object.__init__(self, hal, node)
+        #
         self.printer = config.get_printer()
         ppins = self.printer.lookup_object('pins')
         self.mcu_servo = ppins.setup_pin('pwm', config.get('pin'))
@@ -88,3 +106,12 @@ class PrinterServo:
 
 def load_config_prefix(config):
     return PrinterServo(config)
+
+ATTRS = ("type", "pin",)
+def load_node_object(hal, node):
+    if node.attrs_check():
+        node.object = Object(hal, node)
+    else:
+        node.object = Dummy(hal,node)
+    return node.object
+

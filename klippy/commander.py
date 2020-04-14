@@ -18,6 +18,7 @@ import part
 class sentinel:
     pass
 
+# base class
 class Object(part.Object):
     respond_types = { 'echo': 'echo:', 'command': '//', 'error' : '!!'}
     object_command = ["UNKNOWN", "IGNORE", "ECHO"]
@@ -31,7 +32,7 @@ class Object(part.Object):
         self.metaconf["default_type"] = {"t": "choice", "choices": self.respond_types, "default": "echo"}
         self.metaconf["default_prefix"] = {"t": "str", "default": "self._default_type"}
         #
-        self.printer = self.hal.tree.printer.object
+        self.printer = self.hal.get_printer()
         self.reactor = self.hal.get_reactor()
         self.mutex = self.reactor.mutex()
         # input handling
@@ -125,8 +126,7 @@ class Object(part.Object):
         else:
             key_param = self.get_str(key, params)
         if key_param not in values:
-            raise self.error("The value '%s' is not valid for %s" % (
-                key_param, key))
+            raise self.error("The value '%s' is not valid for %s" % (key_param, key))
         values[key_param](params)
     def register_mux_command(self, cmd, key, value, func, desc=None):
         prev = self.mux_commands.get(cmd)
@@ -135,13 +135,9 @@ class Object(part.Object):
             self.mux_commands[cmd] = prev = (key, {})
         prev_key, prev_values = prev
         if prev_key != key:
-            raise self.printer.config_error(
-                "mux command %s %s %s may have only one key (%s)" % (
-                    cmd, key, value, prev_key))
+            raise error("mux command %s %s %s may have only one key (%s)" % (cmd, key, value, prev_key))
         if value in prev_values:
-            raise self.printer.config_error(
-                "mux command %s %s %s already registered (%s)" % (
-                    cmd, key, value, prev_values))
+            raise error("mux command %s %s %s already registered (%s)" % (cmd, key, value, prev_values))
         prev_values[value] = func
     # scripts support
     def get_mutex(self):
@@ -170,7 +166,7 @@ class Object(part.Object):
     def cmd_ECHO(self, params):
         self.respond_info(params['#original'], log=False)
 
-# main commander, commands receiver and dispatcher
+# commander, commands receiver and dispatcher
 class Dispatch(Object):
     RETRY_TIME = 0.100
     printer_command = ['RESTART', 'RESTART_FIRMWARE', 'SHOW_STATUS', 'HELP', 'RESPOND']
@@ -205,6 +201,7 @@ class Dispatch(Object):
             self.register_command(cmd, func, wnr, desc)
             for a in getattr(self, 'cmd_' + cmd + '_aliases', []):
                 self.register_command(a, func, wnr)
+        #self.register_command("TOOLHEAD_ENABLE", self.cmd_TOOLHEAD_ENABLE, desc = self.cmd_TOOLHEAD_ENABLE_help)
     # event handlers
     def _dump_debug(self):
         out = []
@@ -434,14 +431,14 @@ class Dispatch(Object):
         msg = self.gcode.get_str('MSG', params, '')
         self.gcode.respond("%s %s" %(prefix, msg))
 
-# gcode commander, to use in conjunction with toolheads
+# gcode child commander, to use in conjunction with toolheads
 class Gcode(Object):
     # TODO for G2 ArcMove
     #self.mm_per_arc_segment = config.getfloat('resolution', 1, above=0.0)
     my_command = [
-            'G1', 'G2', 'G4', 'G28', 'G20', 'G90', 'G91', 'G92', 
-            'M82', 'M83', 'M114', 'M220', 'M221', 'M105', 'M112', 'M115', 'M118', 'M400', 
-            'GCODE_SET_OFFSET', 'GCODE_SAVE_STATE', 'GCODE_RESTORE_STATE', 'GET_POSITION'
+            'G1', 'G2', 'G4', 'G20', 'G28', 'G90', 'G91', 'G92', 
+            'M18', 'M82', 'M83', 'M105', 'M112', 'M114', 'M115', 'M118', 'M204', 'M220', 'M221', 'M400', 
+            'GCODE_SET_OFFSET', 'GCODE_SAVE_STATE', 'GCODE_RESTORE_STATE'
     ]
     def __init__(self, hal, node):
         Object.__init__(self, hal, node)
@@ -770,6 +767,11 @@ class Gcode(Object):
         if not offsets:
             self.base_position = list(self.last_position)
     # (M)iscellaneous commands
+    cmd_M18_help = "Disable all stepper motors"
+    cmd_M18_aliases = ['M84'] # M84 "Disable idle hold"
+    def cmd_M18(self, params):
+        # Turn off motors
+        self.motor_off()
     cmd_M82_help = "Set extruder to absolute mode"
     def cmd_M82(self, params):
         self.absolute_extrude = True
@@ -814,6 +816,20 @@ class Gcode(Object):
             else:
                 msg = ''
             self.gcode.respond("%s %s" %(self.default_prefix, msg))
+    cmd_M204_help = "Set default acceleration"
+    def cmd_M204(self, params):
+        gcode = self.hal.get_gcode()
+        if 'S' in params:
+            # Use S for accel
+            accel = gcode.get_float('S', params, above=0.)
+        elif 'P' in params and 'T' in params:
+            # Use minimum of P and T for accel
+            accel = min(gcode.get_float('P', params, above=0.), gcode.get_float('T', params, above=0.))
+        else:
+            gcode.respond_info('Invalid M204 command "%s"' % (params['#original'],))
+            return
+        toolhead.max_accel = min(accel, self.config_max_accel)
+        toolhead._calc_junction_deviation()
     cmd_M220_help = "Set speed factor override percentage"
     def cmd_M220(self, params):
         value = self.get_float('S', params, 100., above=0.) / (60. * 100.)
@@ -829,38 +845,6 @@ class Gcode(Object):
     cmd_M400_help = "Wair for current moves to finish"
     def cmd_M400(self, params):
         self.toolhead.wait_moves()
-    cmd_GET_POSITION_ready_only = True
-    def cmd_GET_POSITION(self, params):
-        if self.toolhead is None:
-            self.cmd_default(params)
-            return
-        kin = self.toolhead.get_kinematics()
-        steppers = kin.get_steppers()
-        mcu_pos = " ".join(["%s:%d" % (s.get_name(), s.get_mcu_position())
-                            for s in steppers])
-        for s in steppers:
-            s.set_tag_position(s.get_commanded_position())
-        stepper_pos = " ".join(["%s:%.6f" % (s.get_name(), s.get_tag_position())
-                                for s in steppers])
-        kin_pos = " ".join(["%s:%.6f" % (a, v)
-                            for a, v in zip("XYZ", kin.calc_tag_position())])
-        toolhead_pos = " ".join(["%s:%.6f" % (a, v) for a, v in zip(
-            "XYZE", self.toolhead.get_position())])
-        gcode_pos = " ".join(["%s:%.6f"  % (a, v)
-                              for a, v in zip("XYZE", self.last_position)])
-        base_pos = " ".join(["%s:%.6f"  % (a, v)
-                             for a, v in zip("XYZE", self.base_position)])
-        homing_pos = " ".join(["%s:%.6f"  % (a, v)
-                               for a, v in zip("XYZ", self.homing_position)])
-        self.respond_info("mcu: %s\n"
-                          "stepper: %s\n"
-                          "kinematic: %s\n"
-                          "toolhead: %s\n"
-                          "gcode: %s\n"
-                          "gcode base: %s\n"
-                          "gcode homing: %s"
-                          % (mcu_pos, stepper_pos, kin_pos, toolhead_pos,
-                             gcode_pos, base_pos, homing_pos))
     cmd_GCODE_SET_OFFSET_help = "Set a virtual offset to g-code positions"
     def cmd_GCODE_SET_OFFSET(self, params):
         move_delta = [0., 0., 0., 0.]

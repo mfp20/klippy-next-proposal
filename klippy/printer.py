@@ -69,7 +69,7 @@ class Main:
         # identify mcu and complete controller init
         try:
             self.send_event("klippy:mcu_identify")
-            # exec connect jobs
+            # exec connect handlers
             for cb in self.event_handlers.get("klippy:connect", []):
                 if self.state_message is not msg("startup"):
                     return
@@ -90,7 +90,7 @@ class Main:
             logging.exception("Unhandled exception during connect")
             self._set_state("Internal error during connect: %s\n%s" % (str(e), msg("restart"),))
             return
-        # exec ready jobs
+        # exec ready handlers
         try:
             self._set_state(msg("ready"))
             for cb in self.event_handlers.get("klippy:ready", []):
@@ -236,6 +236,8 @@ class Composer:
                     part.module = importlib.import_module("controller")
                 elif p == "sensor":
                     part.module = importlib.import_module("parts.sensors."+config.getsection(s.get_name()).get("type"))
+                elif p == "stepper" or p == "servo" or p == "heater" or p == "cooler":
+                    part.module = importlib.import_module("parts.actuators." + p)
                 else:
                     part.module = importlib.import_module("parts." + p)
                 parts[part.name] = part
@@ -325,19 +327,19 @@ class Composer:
     def compose_toolhead(self, config, parts):
         name = config.get_name()
         # kinematic is the toolhead's root
-        knode = tree.PrinterNode("kinematic "+name.split(" ")[1])
+        knode = self.mk("kinematic "+name.split(" ")[1])
         ktype = config.getsection(name).get("kinematics")
         knode.module = importlib.import_module('kinematics.' + ktype)
         knode.attr_set("type", ktype)
         self.hal.tree.printer.child_set(knode)
         # toolhead node is kinematic's child
-        toolhead = tree.PrinterNode(name)
+        toolhead = self.mk(name)
         toolhead.module = importlib.import_module("instrument")
         for a in config.getsection(name).fileconfig.options(name):
             toolhead.attrs[a] = config.getsection(name).get(a)
         knode.child_set(toolhead)
         # gcode node is toolhead's child
-        gnode = tree.PrinterNode("gcode "+name.split(" ")[1])
+        gnode = self.mk("gcode "+name.split(" ")[1])
         gnode.module = self.hal.node("commander").module
         toolhead.child_set(gnode)
         # build toolhead rails and carts

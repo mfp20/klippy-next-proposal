@@ -1,9 +1,8 @@
-# Sensors support base class.
+# Actuators support base class.
 #
-# Each sensor have:
-# - "probe": the actual raw sensor, can be an MCU_* item (ex: endstops) or anything else (ex: thermometers)
-# - "value": the sensor raw value
-# - "read()": on some sensors (ex: endstops) triggers a "value" update and returns value, on polled sensors (ex: thermometers) it returns the last value
+# Each Actuator have:
+# - "value": the actuator raw value
+# - "act()": changes the "acting value"
 #
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
@@ -19,12 +18,9 @@ class Object(part.Object):
         self.metaconf["temp_min"] = {"t":"float", "default":-273.0}
         # max operating temperature
         self.metaconf["temp_max"] = {"t":"float", "default":400.0}
-        # sensor probe
-        self.probe = None
-        # last sensor value
+        #
         self.value = 0.
-        # last sensor update
         self.last = None
-    def read(self):
-        return self.value
+    def act(self, value):
+        self.value = value
 

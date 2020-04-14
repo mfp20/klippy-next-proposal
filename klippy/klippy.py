@@ -75,11 +75,11 @@ def main():
             bglogger.set_rollover_info('versions', versions)
         # - init hardware manager (ie: hw abstraction layer), 
         # - init reactor (ie: fds and timers microthreading),
-        # - set klippy._connect as first task to run
+        # - set klippy._connect as first reactor's task to run
         klippy = printer.Main(input_fd, bglogger, start_args)
         # open, read, parse, validate cfg file, build printer tree
         klippy.config() 
-        # go! 
+        # reactor go! 
         res = klippy.run()
         if res in ['exit', 'error_exit']:
             break

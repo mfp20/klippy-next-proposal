@@ -25,6 +25,14 @@ class Object(part.Object):
         if hasattr(self, "init") and callable(self.init):
             #logging.debug("\t"*indent + "(init) %s", self.name)
             self.init()
+    def parent_bygroup(self, parentgroup):
+        parentnode = self.node().parent(self.hal.node("printer"),self.node().name)
+        while not parentnode.name.startswith(parentgroup):
+            logging.warning("TODO PARENT_BYGROUP: %s", parentnode.name)
+            if parentnode.name == "printer":
+                return None
+            parentnode = parentnode.parent(self.hal.node("printer"),parentnode.name)
+        return parentnode
     def child_get_first(self, name, root = None):
         return self.node().child_get_first(name, self.node())
     def children(self):
@@ -39,7 +47,7 @@ class Object(part.Object):
                     parts.append(p)
         return parts
     def children_deep_bygroup(self, group):
-        return self.node().children_deep(group+" ", list(), self.node())
+        return self.node().children_deep_byname(group+" ", list(), self.node())
     def children_deep_bytype(self, group, typ):
         parts = list()
         for p in self.children_deep_bygroup(group):

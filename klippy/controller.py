@@ -205,8 +205,6 @@ class Pins:
             return self.alias2id(txt)
         return None
     def any2index(self, txt):
-        logging.info(txt)
-        logging.info(self.id)
         if self.isid(txt):
             return self.id2index(txt)
         if self.isalias(txt): 
@@ -1265,6 +1263,10 @@ class Board(part.Object):
         # create spi
         self.spi[bus] = MCU_spi(self.mcu, bus, pin, mode, speed, sw_pins)
 
+######################################################################
+# Misc: VirtualPin, StepperEnableTracker, ...
+######################################################################
+
 # creates a virtual pin that propagates its changes to multiple output pins
 class VirtualPin(part.Object):
     def __init__(self, hal, node):
@@ -1283,22 +1285,73 @@ class VirtualPin(part.Object):
             self.pin[pin] = self.hal.get_controller().pin_setup(pin_type, pin)
         return self
     def get_mcu(self):
-        return self.mcu_pins[0].get_mcu()
+        return self.pin[0].get_mcu()
     def setup_max_duration(self, max_duration):
-        for mcu_pin in self.mcu_pins:
+        for mcu_pin in self.pin:
             mcu_pin.setup_max_duration(max_duration)
     def setup_start_value(self, start_value, shutdown_value):
-        for mcu_pin in self.mcu_pins:
+        for mcu_pin in self.pin:
             mcu_pin.setup_start_value(start_value, shutdown_value)
     def setup_cycle_time(self, cycle_time, hardware_pwm=False):
-        for mcu_pin in self.mcu_pins:
+        for mcu_pin in self.pin:
             mcu_pin.setup_cycle_time(cycle_time, hardware_pwm)
     def set_digital(self, print_time, value):
-        for mcu_pin in self.mcu_pins:
+        for mcu_pin in self.pin:
             mcu_pin.set_digital(print_time, value)
     def set_pwm(self, print_time, value):
-        for mcu_pin in self.mcu_pins:
+        for mcu_pin in self.pin:
             mcu_pin.set_pwm(print_time, value)
+
+# global stepper-enable line tracking
+DISABLE_STALL_TIME = 0.100
+class StepperEnableTracker:
+    def __init__(self, hal):
+        self.hal = hal
+        self.enable_line = {}
+        self.enable_tracker = {}
+    def register_stepper(self, name, line):
+        if line:
+            self.enable_line[name] = line
+        else:
+            self.enable_line.pop(name)
+    def register_tracker(self, name, tracker):
+        if tracker:
+            self.enable_tracker[name] = tracker
+        else:
+            self.enable_tracker.pop(name)
+    def off(self):
+        curtime = self.hal.get_reactor().monotonic()
+        for el in self.enable_line:
+            self.enable_line[el].motor_disable(curtime)
+            self.hal.get_printer().send_event("steppertracker:"+el+":motor_off", curtime)
+    def off_tracker(self, tracker):
+        self.enable_tracker[tracker].off()
+    def debug_switch(self, stepper=None, enable=1):
+        if stepper in self.enable_line:
+            el = self.enable_line.get(stepper, "")
+            curtime = self.hal.get_reactor().monotonic()
+            if enable:
+                el.motor_enable(curtime)
+                logging.info("%s has been manually enabled", stepper)
+            else:
+                el.motor_disable(curtime)
+                logging.info("%s has been manually disabled", stepper)
+        else:
+            self.hal.get_commander().respond_info('STEPPER_SWITCH: Invalid stepper "%s"' % (stepper))
+    def debug_switch_tracker(self, tracker=None, enable=1):
+        if tracker in self.enable_tracker:
+            for s in self.enable_tracker.enable_line:
+                tracker.debug_switch(s, enable)
+        else:
+            self.hal.get_commander().respond_info('TRACKER_SWITCH: Invalid tracker "%s"' % (tracker))
+    def lookup_enable(self, name):
+        if name not in self.enable_lines:
+            raise error("Unknown stepper '%s'" % (name,))
+        return self.enable_lines[name]
+    def lookup_enable_tracker(self, name):
+        if name not in self.enable_tracker:
+            raise error("Unknown tracker '%s'" % (name,))
+        return self.enable_tracker[name]
 
 ######################################################################
 # Controller: multiboard mapper
@@ -1319,16 +1372,22 @@ class Object(composite.Object):
         self.stepper = collections.OrderedDict()
         self.heater = collections.OrderedDict()
         self.cooler = collections.OrderedDict()
+        # generic stepper line tracker for ALL steppers and trackers
+        self.stepper_linetracker = StepperEnableTracker(self.hal)
         #
         self.ready = True
     def register(self):
         for b in self.board:
             self.hal.get_printer().register_event_handler("board:"+b+":ready", self._event_handle_ready)
+        self.hal.get_printer().register_event_handler("commander:request_restart", self._event_handle_request_restart)
+        #
         self.hal.get_commander().register_command('SHOW_PINS_ALL', self.cmd_SHOW_PINS_ALL, desc=self.cmd_SHOW_PINS_ALL_help)
         self.hal.get_commander().register_command('SHOW_PINS_ACTIVE', self.cmd_SHOW_PINS_ACTIVE, desc=self.cmd_SHOW_PINS_ACTIVE_help)
         self.hal.get_commander().register_command("SHOW_ADC_VALUE", self.cmd_SHOW_ADC_VALUE, desc=self.cmd_SHOW_ADC_VALUE_help)
         self.hal.get_commander().register_command("SHOW_ENDSTOPS", self.cmd_SHOW_ENDSTOPS, desc=self.cmd_SHOW_ENDSTOPS_help)
         #gcode.register_command("M119", self.cmd_SHOW_ENDSTOPS)
+        self.hal.get_commander().register_command("STEPPER_SWITCH", self.cmd_STEPPER_SWITCH, desc = self.cmd_STEPPER_SWITCH_help)
+        self.hal.get_commander().register_command("STEPPER_GROUP_SWITCH", self.cmd_STEPPER_GROUP_SWITCH, desc = self.cmd_STEPPER_GROUP_SWITCH_help)
     # events handlers
     def _event_handle_ready(self):
         self.board_ready = self.board_ready + 1
@@ -1336,6 +1395,8 @@ class Object(composite.Object):
             self.hal.ready()
         elif self.board_ready > self.hal.mcu_count:
             raise error("Controller: too many ready MCUs.")
+    def _event_handle_request_restart(self, print_time):
+        self.stepper_linetracker.motor_off()
     # setup custom pin aliases
     # TODO
     def setup_custom_alias(self, aliases):
@@ -1396,11 +1457,31 @@ class Object(composite.Object):
     # (un)registers parts
     def register_part(self, node, remove = False):
         if remove:
-            # delete
+            # unregister
             for parts in [self.board, self.virtual, self.endstop, self.thermometer, self.hygrometer, self.barometer, self.filament, self.stepper, self.heater, self.cooler]:
                 if node.name in parts:
-                    parts.pop(node.name)
-                    return None
+                    if node.name.startswith("mcu "):
+                        pass
+                    elif node.name.startswith("virtual "):
+                        pass
+                    elif node.name.startswith("sensor "):
+                        if node.attr("type") == "endstop":
+                            pass
+                        if node.attr("type") == "thermometer":
+                            pass
+                        if node.attr("type") == "hygrometer":
+                            pass
+                        if node.attr("type") == "barometer":
+                            pass
+                        if node.attr("type") == "filament":
+                            pass
+                    elif node.name.startswith("stepper "):
+                        pass
+                    elif node.name.startswith("heater "):
+                        pass
+                    elif node.name.startswith("cooler "):
+                        pass
+                    return parts.pop(node.name)
             logging.warning("Part '%s' not registered in controller. Can't de-register.", node.name)
         else:
             # register
@@ -1426,6 +1507,7 @@ class Object(composite.Object):
                     self.filament[node.name] = node.object
             elif node.name.startswith("stepper "):
                 self.stepper[node.name] = node.object
+                self.stepper_linetracker.register_stepper(node.name, node.object.enable)
             elif node.name.startswith("heater "):
                 self.heater[node.name] = node.object
             elif node.name.startswith("cooler "):
@@ -1467,6 +1549,16 @@ class Object(composite.Object):
             msg = msg + ["%s:%s\n" % (name, ["open", "TRIGGERED"][not not t]) for name, t in rail.get_endstops_status()]
         #
         self.hal.get_gcode().respond(msg)
+    cmd_STEPPER_SWITCH_help = "Enable/disable individual stepper by name"
+    def cmd_STEPPER_SWITCH(self, params):
+        stepper_name = self.hal.get_commander().get_str('STEPPER', params, None)
+        stepper_enable = self.hal.get_commander().get_int('ENABLE', params, 1)
+        self.stepper_linetracker.debug_switch(stepper_name, stepper_enable)
+    cmd_STEPPER_GROUP_SWITCH_help = "Enable/disable one group of steppers (ex: rail steppers, toolhead steppers) by name"
+    def cmd_STEPPER_GROUP_SWITCH(self, params):
+        stepper_group = self.hal.get_commander().get_str('GROUP', params, None)
+        stepper_enable = self.hal.get_commander().get_int('ENABLE', params, 1)
+        self.stepper_linetracker.debug_switch_tracker(stepper_group, stepper_enable)
 
 ATTRS = ("serialport", "baud", "pin_map", "restart_method")
 def load_node_object(hal, node):

@@ -10,7 +10,39 @@ from messaging import msg
 from messaging import Kerr as error
 import composite
 
-ATTRS = ("position_min", "position_max")
+# rail stepper-enable line tracking
+class StepperEnableRail:
+    def __init__(self, hal, rail):
+        self.hal = hal
+        self.rail = rail
+        self.enable_line = {}
+    def register_stepper(self, name, line):
+        if line:
+            self.enable_line[name] = line
+        else:
+            self.enable_line.pop(name)
+    # all motors off
+    def off(self, print_time = None):
+        for el in self.enable_line:
+            self.enable_line[el].motor_disable(print_time)
+        self.hal.get_printer().send_event("steppertracker:"+self.rail.name+":motor_off", print_time)
+    # switch on/off the given stepper
+    def debug_switch(self, stepper=None, enable=1):
+        if stepper in self.enable_line:
+            el = self.enable_line.get(stepper, "")
+            if enable:
+                el.motor_enable(print_time)
+                logging.info("%s has been manually enabled", stepper)
+            else:
+                el.motor_disable(print_time)
+                logging.info("%s has been manually disabled", stepper)
+        else:
+            self.hal.get_commander().respond_info('STEPPER_SWITCH: Invalid stepper "%s"' % (stepper))
+        logging.debug('; Max time of %f', print_time)
+    def lookup_enable(self, name):
+        if name not in self.enable_line:
+            raise error("Unknown stepper '%s'" % (name,))
+        return self.enable_line[name]
 
 # TODO 
 class Dummy(composite.Object):
@@ -39,28 +71,34 @@ class Object(composite.Object):
     def init(self):
         if self.ready:
             return
-        self.steppers = []
-        self.endstops = []
+        self.stepper = []
+        self.stepper_linetracker = StepperEnableRail(self.hal, self) 
+        self.endstop = []
         self.need_position_minmax = True
         self.default_position_endstop = None
         # steppers
         for s in self.children_bygroup("stepper"):
-            self.steppers.append(s.object.stepper)
+            # register motor
+            self.stepper.append(s.object.actuator)
+            # register enable line
+            self.stepper_linetracker.register_stepper(s.name, s.object.enable)
+        # register this stepper tracker
+        self.hal.get_controller().stepper_linetracker.register_tracker(self.name, self.stepper_linetracker)
         # endstops
         for e in ["sensor_min", "sensor_max", "sensor_level"]:
             if hasattr(self, "_"+e):
                 en = self.child_get_first("sensor "+self.conf[e])
                 if en:
-                    for s in self.steppers:
+                    for s in self.stepper:
                         en.object.sensor.add_stepper(s)
-                    self.endstops.append((en.object.sensor, e))
+                    self.endstop.append((en.object.sensor, e))
                     #query_endstops = printer.try_load_module(config, 'query_endstops')
                     #query_endstops.register_endstop(mcu_endstop, name)
                 else:
-                    self.endstops.append((None, e))
+                    self.endstop.append((None, e))
             else:
-                self.endstops.append((None, e))
-        mcu_stepper = self.steppers[0]
+                self.endstop.append((None, e))
+        mcu_stepper = self.stepper[0]
         self.get_commanded_position = mcu_stepper.get_commanded_position
         self.get_tag_position = mcu_stepper.get_tag_position
         self.set_tag_position = mcu_stepper.set_tag_position
@@ -72,7 +110,7 @@ class Object(composite.Object):
         pass
     def setup_position_endstop(self, default_position_endstop = None):
         self.default_position_endstop = default_position_endstop
-        mcu_endstop = self.endstops[0][0]
+        mcu_endstop = self.endstop[0][0]
         if hasattr(mcu_endstop, "get_position_endstop"):
             self.position_endstop = mcu_endstop.get_position_endstop()
         elif default_position_endstop is None:
@@ -115,30 +153,31 @@ class Object(composite.Object):
                 self.homing_speed, self.position_endstop, self.homing_retract_speed, self.homing_retract_dist, self.homing_positive_dir, self.second_homing_speed)
         return homing_info
     def get_steppers(self):
-        return list(self.steppers)
+        return list(self.stepper)
     def get_endstops(self):
-        return list(self.endstops)
+        return list(self.endstop)
     def get_endstops_status(self):
         # TODO
         print_time = self.printer.lookup_object('toolhead').get_last_move_time()
         last_state = [(name, mcu_endstop.query_endstop(print_time)) for mcu_endstop, name in self.endstops]
         return {'last_query': {name: value for name, value in last_state}}
     def setup_itersolve(self, alloc_func, *params):
-        for stepper in self.steppers:
+        for stepper in self.stepper:
             stepper.setup_itersolve(alloc_func, *params)
     def generate_steps(self, flush_time):
-        for stepper in self.steppers:
+        for stepper in self.stepper:
             stepper.generate_steps(flush_time)
     def set_trapq(self, trapq):
-        for stepper in self.steppers:
+        for stepper in self.stepper:
             stepper.set_trapq(trapq)
     def set_max_jerk(self, max_halt_velocity, max_accel):
-        for stepper in self.steppers:
+        for stepper in self.stepper:
             stepper.set_max_jerk(max_halt_velocity, max_accel)
     def set_position(self, coord):
-        for stepper in self.steppers:
+        for stepper in self.stepper:
             stepper.set_position(coord)
 
+ATTRS = ("position_min", "position_max")
 def load_node_object(hal, node):
     if node.attrs_check():
         node.object = Object(hal, node)

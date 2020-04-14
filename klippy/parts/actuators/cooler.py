@@ -5,13 +5,12 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
-import part
-
+from parts import actuator
 
 # TODO
-class Dummy(part.Object):
+class Dummy(actuator.Object):
     def __init__(self, hal, node):
-        part.Object.__init__(self,hal,node)
+        actuator.Object.__init__(self,hal,node)
         logging.warning("(%s) cooler.Dummy", self.name)
     def configure(self):
         if self.ready:
@@ -19,9 +18,9 @@ class Dummy(part.Object):
         logging.warning("(%s) cooler.configure: TODO dummy MCU_digital_out and MCU_pwm", self.get_name())
         self.ready = True
 
-class Object(part.Object):
+class Object(actuator.Object):
     def __init__(self, hal, node):
-        part.Object.__init__(self,hal,node)
+        actuator.Object.__init__(self,hal,node)
         self.metaconf["type"] = {"t":"str"}
         self.metaconf["pin"] = {"t":"str"}
         self.metaconf["power_max"] = {"t":"float", "default":1., "above":0., "maxval":1.}
@@ -29,10 +28,6 @@ class Object(part.Object):
         # pwm min and max
         self.metaconf["min"] = {"t":"float", "default":0., "minval":0.}
         self.metaconf["max"] = {"t":"float", "default":1., "maxval":1., "above":"self._min"}
-        # min operating temperature #TODO move in a better location, so that EVERY part have one of those
-        self.metaconf["temp_min"] = {"t":"float", "default":-273.0}
-        # max operating temperature
-        self.metaconf["temp_max"] = {"t":"float", "default":400.0}
     def configure(self):
         if self.ready:
             return

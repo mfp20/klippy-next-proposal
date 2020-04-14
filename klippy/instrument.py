@@ -187,9 +187,53 @@ class MoveQueue:
             # Enough moves have been queued to reach the target flush time.
             self.flush(lazy=True)
 
+# toolhead stepper-enable line tracking
+DISABLE_STALL_TIME = 0.100
+class StepperEnableToolhead:
+    def __init__(self, hal, toolhead, gcode):
+        self.hal = hal
+        self.toolhead = toolhead
+        self.gcode = gcode
+        self.enable_line = {}
+    def register_stepper(self, name, line):
+        if line:
+            self.enable_line[name] = line
+        else:
+            self.enable_line.pop(name)
+    # turn off all toolhead's steppers
+    def off(self):
+        self.toolhead.dwell(DISABLE_STALL_TIME)
+        print_time = self.toolhead.get_last_move_time()
+        for el in self.enable_line:
+            self.enable_line[el].motor_disable(print_time)
+        self.hal.get_printer().send_event("steppertracker:"+self.toolhead.name+":motor_off", print_time)
+        self.toolhead.dwell(DISABLE_STALL_TIME)
+        logging.debug('; Max time of %f', print_time)
+    # switch on/off the given stepper(s)
+    def debug_switch(self, stepper=None, enable=1):
+        self.toolhead.dwell(DISABLE_STALL_TIME)
+        print_time = self.toolhead.get_last_move_time()
+        if stepper in self.enable_line:
+            el = self.enable_line.get(stepper, "")
+            if enable:
+                el.motor_enable(print_time)
+                logging.info("%s has been manually enabled", stepper)
+            else:
+                el.motor_disable(print_time)
+                logging.info("%s has been manually disabled", stepper)
+        else:
+            self.gcode.respond_info('STEPPER_SWITCH: Invalid stepper "%s"' % (stepper))
+        self.toolhead.dwell(DISABLE_STALL_TIME)
+        logging.debug('; Max time of %f', print_time)
+    def lookup_enable(self, name):
+        if name not in self.enable_line:
+            raise error("Unknown stepper '%s'" % (name,))
+        return self.enable_line[name]
+
+# toolhead
+
 MIN_KIN_TIME = 0.100
 MOVE_BATCH_TIME = 0.500
-
 DRIP_SEGMENT_TIME = 0.050
 DRIP_TIME = 0.100
 class DripModeEndSignal(Exception):
@@ -226,12 +270,17 @@ class Object(composite.Object):
         self.metaconf["buffer_time_high"] = {"t":"float", "default":2.000, "above":"self._buffer_time_low"}
         self.metaconf["buffer_time_start"] = {"t":"float", "default":0.250, "above":0.}
         self.metaconf["move_flush_time"] = {"t":"float", "default":0.050, "above":0.}
-
     def init(self):
         if self.ready:
             return
-        self.gcode = self.hal.get_gcode(self.id())
         self.kin = self.hal.get_kinematic(self.id())
+        self.gcode = self.hal.get_gcode(self.id())
+        # stepper enable line tracker
+        self.stepper_linetracker = StepperEnableToolhead(self.hal, self, self.gcode)
+        for s in self.children_deep_bygroup("stepper"):
+            self.stepper_linetracker.register_stepper(s.name, s.object.enable)
+        self.hal.get_controller().stepper_linetracker.register_tracker(self.name, self.stepper_linetracker)
+        #
         self.reactor = self.hal.get_reactor()
         self.all_mcus = self.hal.get_controller().mcu_list()
         self.mcu = self.all_mcus[0]
@@ -278,9 +327,11 @@ class Object(composite.Object):
         self.ready = True
     def register(self):
         self.hal.get_printer().register_event_handler("klippy:shutdown", self._handle_shutdown)
-        self.gcode.register_command('SET_VELOCITY_LIMIT', self.cmd_SET_VELOCITY_LIMIT, True, desc=self.cmd_SET_VELOCITY_LIMIT_help)
-        self.gcode.register_command('M204', self.cmd_M204, True)
-    # Print time tracking
+        self.gcode.register_command('SET_VELOCITY_LIMIT', self.cmd_SET_VELOCITY_LIMIT, True, desc=self.cmd_SET_VELOCITY_LIMIT_help) 
+        #self.gcode.register_command('POSITION_GET', self.cmd_POSITION_GET, True, desc=self.cmd_POSITION_GET_help)
+        #self.gcode.register_command('POSITION_FORCE', self.cmd_POSITION_FORCE, desc=self.cmd_POSITION_FORCE_help)
+        self.gcode.register_command('STEPPER_SWITCH', self.cmd_STEPPER_SWITCH, desc=self.cmd_STEPPER_SWITCH_help)
+   # Print time tracking
     def _update_move_time(self, next_print_time):
         batch_time = MOVE_BATCH_TIME
         kin_flush_delay = self.kin_flush_delay
@@ -557,25 +608,49 @@ class Object(composite.Object):
         msg = ("max_velocity: %.6f\n"
                "max_accel: %.6f\n"
                "max_accel_to_decel: %.6f\n"
-               "square_corner_velocity: %.6f"% (
-                   max_velocity, max_accel, self.requested_accel_to_decel,
-                   square_corner_velocity))
+               "square_corner_velocity: %.6f"
+               % (max_velocity, max_accel, self.requested_accel_to_decel, square_corner_velocity))
         self.printer.set_rollover_info("toolhead", "toolhead: %s" % (msg,))
         gcode.respond_info(msg, log=False)
-    cmd_M204_help = "Set default acceleration"
-    def cmd_M204(self, params):
-        gcode = self.node.get_gcode()
-        if 'S' in params:
-            # Use S for accel
-            accel = gcode.get_float('S', params, above=0.)
-        elif 'P' in params and 'T' in params:
-            # Use minimum of P and T for accel
-            accel = min(gcode.get_float('P', params, above=0.), gcode.get_float('T', params, above=0.))
-        else:
-            gcode.respond_info('Invalid M204 command "%s"' % (params['#original'],))
+    cmd_POSITION_GET_ready_only = True
+    def cmd_POSITION_GET(self, params):
+        if self.toolhead is None:
+            self.cmd_default(params)
             return
-        self.max_accel = min(accel, self.config_max_accel)
-        self._calc_junction_deviation()
+        kin = self.toolhead.get_kinematics()
+        steppers = kin.get_steppers()
+        mcu_pos = " ".join(["%s:%d" % (s.get_name(), s.get_mcu_position()) for s in steppers])
+        for s in steppers:
+            s.set_tag_position(s.get_commanded_position())
+        stepper_pos = " ".join(["%s:%.6f" % (s.get_name(), s.get_tag_position()) for s in steppers])
+        kin_pos = " ".join(["%s:%.6f" % (a, v) for a, v in zip("XYZ", kin.calc_tag_position())])
+        toolhead_pos = " ".join(["%s:%.6f" % (a, v) for a, v in zip("XYZE", self.toolhead.get_position())])
+        gcode_pos = " ".join(["%s:%.6f"  % (a, v) for a, v in zip("XYZE", self.last_position)])
+        base_pos = " ".join(["%s:%.6f"  % (a, v) for a, v in zip("XYZE", self.base_position)])
+        homing_pos = " ".join(["%s:%.6f"  % (a, v) for a, v in zip("XYZ", self.homing_position)])
+        self.respond_info("mcu: %s\n"
+                          "stepper: %s\n"
+                          "kinematic: %s\n"
+                          "toolhead: %s\n"
+                          "gcode: %s\n"
+                          "gcode base: %s\n"
+                          "gcode homing: %s"
+                          % (mcu_pos, stepper_pos, kin_pos, toolhead_pos, gcode_pos, base_pos, homing_pos))
+    cmd_POSITION_FORCE_help = "Force a low-level kinematic position"
+    def cmd_POSITION_FORCE(self, params):
+        self.get_last_move_time()
+        curpos = self.get_position()
+        x = self.gcode.get_float('X', params, curpos[0])
+        y = self.gcode.get_float('Y', params, curpos[1])
+        z = self.gcode.get_float('Z', params, curpos[2])
+        logging.warning("POSITION_FORCE pos=%.3f,%.3f,%.3f", x, y, z)
+        self.set_position([x, y, z, curpos[3]], homing_axes=(0, 1, 2))
+        self.gcode.reset_last_position()
+    cmd_STEPPER_SWITCH_help = "Enable/disable individual stepper by name"
+    def cmd_STEPPER_SWITCH(self, params):
+        stepper_name = self.gcode.get_str('STEPPER', params, None)
+        stepper_enable = self.gcode.get_int('ENABLE', params, 1)
+        self.stepper_linetracker.debug_switch(stepper_name, stepper_enable)
 
 ATTRS = ("x", "y", "z", "max_velocity", "max_accel", "max_z_velocity", "max_z_accel")
 def load_node_object(hal, node):
