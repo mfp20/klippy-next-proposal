@@ -20,6 +20,8 @@ class Dummy(composite.Object):
         self.ready = True
     def register(self):
         pass
+    def setup_pressure_advance(self):
+        pass
     def update_move_time(self, flush_time):
         pass
     def check_move(self, move):
@@ -98,8 +100,8 @@ class Object(composite.Object):
     def setup_pressure_advance(self):
         self._set_pressure_advance(self._pressure_advance, self._pressure_advance_smooth_time)
     def register(self):
-        #self.gcode.register_mux_command("SET_PRESSURE_ADVANCE", "EXTRUDER", None, self.cmd_default_SET_PRESSURE_ADVANCE, desc=self.cmd_SET_PRESSURE_ADVANCE_help)
-        #self.gcode.register_mux_command("SET_PRESSURE_ADVANCE", "EXTRUDER", self.name, self.cmd_SET_PRESSURE_ADVANCE, desc=self.cmd_SET_PRESSURE_ADVANCE_help)
+        #self.gcode.register_mux_command("M572", "EXTRUDER", None, self.cmd_default_M572, desc=self.cmd_M572_help)
+        #self.gcode.register_mux_command("M572", "EXTRUDER", self.name, self.cmd_M572, desc=self.cmd_M572_help)
         #self.gcode.register_mux_command("ACTIVATE_EXTRUDER", "EXTRUDER", self.name, self.cmd_ACTIVATE_EXTRUDER, desc=self.cmd_ACTIVATE_EXTRUDER_help)
         pass
     def update_move_time(self, flush_time):
@@ -169,11 +171,11 @@ class Object(composite.Object):
                           move.start_pos[3], 0., 0.,
                           1., pressure_advance, 0.,
                           start_v, cruise_v, accel)
-    cmd_SET_PRESSURE_ADVANCE_help = "Set pressure advance parameters"
-    def cmd_default_SET_PRESSURE_ADVANCE(self, params):
+    cmd_M572_help = "Set or report extruder pressure advance"
+    def cmd_default_M572(self, params):
         extruder = self.printer.lookup_object('toolhead').get_extruder()
-        extruder.cmd_SET_PRESSURE_ADVANCE(params)
-    def cmd_SET_PRESSURE_ADVANCE(self, params):
+        extruder.cmd_M572(params)
+    def cmd_M572(self, params):
         pressure_advance = self.gcode.get_float('ADVANCE', params, self._pressure_advance, minval=0.)
         smooth_time = self.gcode.get_float('SMOOTH_TIME', params, self._pressure_advance_smooth_time, minval=0., maxval=.200)
         self._set_pressure_advance(pressure_advance, smooth_time)

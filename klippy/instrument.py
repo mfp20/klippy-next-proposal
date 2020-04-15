@@ -336,7 +336,7 @@ class Object(composite.Object):
         self.hal.get_printer().register_event_handler("klippy:shutdown", self._handle_shutdown)
         self.gcode.register_command('SET_VELOCITY_LIMIT', self.cmd_SET_VELOCITY_LIMIT, True, desc=self.cmd_SET_VELOCITY_LIMIT_help) 
         self.gcode.register_command('POSITION_GET', self.cmd_POSITION_GET, True, desc=self.cmd_POSITION_GET_help)
-        self.gcode.register_command('POSITION_FORCE', self.cmd_POSITION_FORCE, desc=self.cmd_POSITION_FORCE_help)
+        self.gcode.register_command('POSITION_FORCE', self.cmd_POSITION_FORCE, True, desc=self.cmd_POSITION_FORCE_help)
         self.gcode.register_command('STEPPER_SWITCH', self.cmd_STEPPER_SWITCH, desc=self.cmd_STEPPER_SWITCH_help)
    # Print time tracking
     def _update_move_time(self, next_print_time):
