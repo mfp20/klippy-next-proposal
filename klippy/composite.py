@@ -33,7 +33,7 @@ class Object(part.Object):
                 return None
             parentnode = parentnode.parent(self.hal.node("printer"),parentnode.name)
         return parentnode
-    def child_get_first(self, name, root = None):
+    def child_get_first(self, name):
         return self.node().child_get_first(name, self.node())
     def children(self):
         return self.node().children_list(self.name)

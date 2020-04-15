@@ -13,8 +13,8 @@ import logging, math
 from messaging import msg
 from messaging import Kerr as error
 import composite, chelper
-from kinematics.dummy import Object as DummyKinematic
-from kinematics.extruder import Dummy as DummyExtruder
+from kinematics import cartesian
+from parts import extruder
 
 # Class to track each move request
 class Move:
@@ -317,8 +317,15 @@ class Object(composite.Object):
         self.trapq_append = ffi_lib.trapq_append
         self.trapq_free_moves = ffi_lib.trapq_free_moves
         self.step_generators = []
-        # Create kinematics class
-        self.extruder = DummyExtruder()
+        # set default tool
+        tools = [t.object for t in self.children_deep_bytype("tool", "extruder")]
+        if tools:
+            for t in tools:
+                t.install(self)
+            self.set_extruder(tools[0], 0.)
+        else:
+            self.set_extruder(extruder.Dummy(self.hal, None), 0.)
+        self.extruder.setup_pressure_advance()
         # Load some default modules
         #self.printer.try_load_module(config, "idle_timeout")
         #self.printer.try_load_module(config, "statistics")
@@ -328,8 +335,8 @@ class Object(composite.Object):
     def register(self):
         self.hal.get_printer().register_event_handler("klippy:shutdown", self._handle_shutdown)
         self.gcode.register_command('SET_VELOCITY_LIMIT', self.cmd_SET_VELOCITY_LIMIT, True, desc=self.cmd_SET_VELOCITY_LIMIT_help) 
-        #self.gcode.register_command('POSITION_GET', self.cmd_POSITION_GET, True, desc=self.cmd_POSITION_GET_help)
-        #self.gcode.register_command('POSITION_FORCE', self.cmd_POSITION_FORCE, desc=self.cmd_POSITION_FORCE_help)
+        self.gcode.register_command('POSITION_GET', self.cmd_POSITION_GET, True, desc=self.cmd_POSITION_GET_help)
+        self.gcode.register_command('POSITION_FORCE', self.cmd_POSITION_FORCE, desc=self.cmd_POSITION_FORCE_help)
         self.gcode.register_command('STEPPER_SWITCH', self.cmd_STEPPER_SWITCH, desc=self.cmd_STEPPER_SWITCH_help)
    # Print time tracking
     def _update_move_time(self, next_print_time):
@@ -344,7 +351,7 @@ class Object(composite.Object):
             free_time = max(lkft, sg_flush_time - kin_flush_delay)
             self.trapq_free_moves(self.trapq, free_time)
             self.extruder.update_move_time(free_time)
-            mcu_flush_time = max(lkft, sg_flush_time - self.move_flush_time)
+            mcu_flush_time = max(lkft, sg_flush_time - self._move_flush_time)
             for m in self.all_mcus:
                 m.flush_moves(mcu_flush_time)
             if self.print_time >= next_print_time:
@@ -394,7 +401,7 @@ class Object(composite.Object):
         self.special_queuing_state = "Flushed"
         self.need_check_stall = -1.
         self.reactor.update_timer(self.flush_timer, self.reactor.NEVER)
-        self.move_queue.set_flush_time(self.buffer_time_high)
+        self.move_queue.set_flush_time(self._buffer_time_high)
         self.idle_flush_print_time = 0.
         flush_time = self.last_kin_move_time + self.kin_flush_delay
         self.last_kin_flush_time = max(self.last_kin_flush_time, flush_time)
@@ -425,7 +432,7 @@ class Object(composite.Object):
         while 1:
             est_print_time = self.mcu.estimated_print_time(eventtime)
             buffer_time = self.print_time - est_print_time
-            stall_time = buffer_time - self.buffer_time_high
+            stall_time = buffer_time - self._buffer_time_high
             if stall_time <= 0.:
                 break
             if not self.can_pause:
@@ -434,7 +441,7 @@ class Object(composite.Object):
             eventtime = self.reactor.pause(eventtime + min(1., stall_time))
         if not self.special_queuing_state:
             # In main state - defer stall checking until needed
-            self.need_check_stall = (est_print_time + self.buffer_time_high
+            self.need_check_stall = (est_print_time + self._buffer_time_high
                                      + 0.100)
     def _flush_handler(self, eventtime):
         try:
@@ -490,7 +497,7 @@ class Object(composite.Object):
         return self.extruder
     # Homing "drip move" handling
     def _update_drip_move_time(self, next_print_time):
-        flush_delay = DRIP_TIME + self.move_flush_time + self.kin_flush_delay
+        flush_delay = DRIP_TIME + self._move_flush_time + self.kin_flush_delay
         while self.print_time < next_print_time:
             if self.drip_completion.test():
                 raise DripModeEndSignal()
@@ -509,7 +516,7 @@ class Object(composite.Object):
         self.special_queuing_state = "Drip"
         self.need_check_stall = self.reactor.NEVER
         self.reactor.update_timer(self.flush_timer, self.reactor.NEVER)
-        self.move_queue.set_flush_time(self.buffer_time_high)
+        self.move_queue.set_flush_time(self._buffer_time_high)
         self.idle_flush_print_time = 0.
         self.drip_completion = drip_completion
         # Submit move
@@ -612,6 +619,7 @@ class Object(composite.Object):
                % (max_velocity, max_accel, self.requested_accel_to_decel, square_corner_velocity))
         self.printer.set_rollover_info("toolhead", "toolhead: %s" % (msg,))
         gcode.respond_info(msg, log=False)
+    cmd_POSITION_GET_help = "Get current position"
     cmd_POSITION_GET_ready_only = True
     def cmd_POSITION_GET(self, params):
         if self.toolhead is None:
@@ -637,6 +645,7 @@ class Object(composite.Object):
                           "gcode homing: %s"
                           % (mcu_pos, stepper_pos, kin_pos, toolhead_pos, gcode_pos, base_pos, homing_pos))
     cmd_POSITION_FORCE_help = "Force a low-level kinematic position"
+    cmd_POSITION_FORCE_ready_only = True
     def cmd_POSITION_FORCE(self, params):
         self.get_last_move_time()
         curpos = self.get_position()
@@ -659,6 +668,6 @@ def load_node_object(hal, node):
     else:
         node.object = Dummy(hal, node)
         # force dummy kinematic too
-        kin = node.parent(hal.tree.printer, node.name)
-        kin.object = DummyKinematic(hal, kin)
+        knode = node.parent(hal.tree.printer, node.name)
+        knode.object = cartesian.Dummy(hal, knode)
     return node.object

@@ -1,4 +1,4 @@
-# Example simple "part" stub file.
+# Support for nozzles.
 # 
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
@@ -6,7 +6,6 @@
 
 import part
 
-ATTRS = ("diameter",)
 
 # TODO 
 class Dummy(part.Object):
@@ -19,9 +18,13 @@ class Dummy(part.Object):
         self.ready = True
 
 class Object(part.Object):
+    def __init__(self, hal, node):
+        part.Object.__init__(self, hal, node)
+        self.metaconf["diameter"] = {"t":"float", "above":0.}
     def configure(self):
         self.ready = True
 
+ATTRS = ("diameter",)
 def load_node_object(hal, node):
     if node.attrs_check():
         node.object = Object(hal, node)

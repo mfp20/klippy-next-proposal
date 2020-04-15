@@ -1385,9 +1385,12 @@ class Object(composite.Object):
         self.hal.get_commander().register_command('SHOW_PINS_ACTIVE', self.cmd_SHOW_PINS_ACTIVE, desc=self.cmd_SHOW_PINS_ACTIVE_help)
         self.hal.get_commander().register_command("SHOW_ADC_VALUE", self.cmd_SHOW_ADC_VALUE, desc=self.cmd_SHOW_ADC_VALUE_help)
         self.hal.get_commander().register_command("SHOW_ENDSTOPS", self.cmd_SHOW_ENDSTOPS, desc=self.cmd_SHOW_ENDSTOPS_help)
-        #gcode.register_command("M119", self.cmd_SHOW_ENDSTOPS)
+        self.hal.get_commander().register_command('STEPPER_BUZZ', self.cmd_STEPPER_BUZZ, desc=self.cmd_STEPPER_BUZZ_help)
+        self.hal.get_commander().register_command('STEPPER_MOVE', self.cmd_STEPPER_MOVE, desc=self.cmd_STEPPER_MOVE_help)
+        self.hal.get_commander().register_command('STEPPER_MOVE_FORCE', self.cmd_STEPPER_MOVE_FORCE, desc=self.cmd_STEPPER_MOVE_FORCE_help)
         self.hal.get_commander().register_command("STEPPER_SWITCH", self.cmd_STEPPER_SWITCH, desc = self.cmd_STEPPER_SWITCH_help)
-        self.hal.get_commander().register_command("STEPPER_GROUP_SWITCH", self.cmd_STEPPER_GROUP_SWITCH, desc = self.cmd_STEPPER_GROUP_SWITCH_help)
+        self.hal.get_commander().register_command("STEPPER_SWITCH_GROUP", self.cmd_STEPPER_SWITCH_GROUP, desc = self.cmd_STEPPER_SWITCH_GROUP_help)
+        self.hal.get_commander().register_command("STEPPER_OFF", self.cmd_STEPPER_OFF, desc = self.cmd_STEPPER_OFF_help)
     # events handlers
     def _event_handle_ready(self):
         self.board_ready = self.board_ready + 1
@@ -1549,16 +1552,62 @@ class Object(composite.Object):
             msg = msg + ["%s:%s\n" % (name, ["open", "TRIGGERED"][not not t]) for name, t in rail.get_endstops_status()]
         #
         self.hal.get_gcode().respond(msg)
+    cmd_STEPPER_BUZZ_help = "Oscillate a given stepper to help id it"
+    def cmd_STEPPER_BUZZ(self, params):
+        stepper = self._lookup_stepper(params)
+        logging.info("Stepper buzz %s", stepper.get_name())
+        was_enable = self.force_enable(stepper)
+        toolhead = self.printer.lookup_object('toolhead')
+        dist, speed = BUZZ_DISTANCE, BUZZ_VELOCITY
+        if stepper.units_in_radians():
+            dist, speed = BUZZ_RADIANS_DISTANCE, BUZZ_RADIANS_VELOCITY
+        for i in range(10):
+            self.move_force(stepper, dist, speed)
+            toolhead.dwell(.050)
+            self.move_force(stepper, -dist, speed)
+            toolhead.dwell(.450)
+        self.restore_enable(stepper, was_enable)
+    cmd_STEPPER_MOVE_help = "Manually move a stepper (only at idle, see STEPPER_MOVE_FORCE)"
+    def cmd_STEPPER_MOVE(self, params):
+        if 'ENABLE' in params:
+            self.do_enable(self.gcode.get_int('ENABLE', params))
+        if 'SET_POSITION' in params:
+            setpos = self.gcode.get_float('SET_POSITION', params)
+            self.do_set_position(setpos)
+        sync = self.gcode.get_int('SYNC', params, 1)
+        homing_move = self.gcode.get_int('STOP_ON_ENDSTOP', params, 0)
+        speed = self.gcode.get_float('SPEED', params, self.velocity, above=0.)
+        accel = self.gcode.get_float('ACCEL', params, self.accel, minval=0.)
+        if homing_move:
+            movepos = self.gcode.get_float('MOVE', params)
+            self.do_homing_move(movepos, speed, accel, homing_move > 0, abs(homing_move) == 1)
+        elif 'MOVE' in params:
+            movepos = self.gcode.get_float('MOVE', params)
+            self.do_move(movepos, speed, accel, sync)
+        elif 'SYNC' in params and sync:
+            self.sync_print_time()
+    cmd_STEPPER_MOVE_FORCE_help = "Manually move a stepper; invalidates kinematics"
+    def cmd_STEPPER_MOVE_FORCE(self, params):
+        stepper = self._lookup_stepper(params)
+        distance = self.gcode.get_float('DISTANCE', params)
+        speed = self.gcode.get_float('VELOCITY', params, above=0.)
+        accel = self.gcode.get_float('ACCEL', params, 0., minval=0.)
+        logging.warning("STEPPER_MOVE_FORCE %s distance=%.3f velocity=%.3f accel=%.3f", stepper.get_name(), distance, speed, accel)
+        self.force_enable(stepper)
+        self.move_force(stepper, distance, speed, accel)
     cmd_STEPPER_SWITCH_help = "Enable/disable individual stepper by name"
     def cmd_STEPPER_SWITCH(self, params):
         stepper_name = self.hal.get_commander().get_str('STEPPER', params, None)
         stepper_enable = self.hal.get_commander().get_int('ENABLE', params, 1)
         self.stepper_linetracker.debug_switch(stepper_name, stepper_enable)
-    cmd_STEPPER_GROUP_SWITCH_help = "Enable/disable one group of steppers (ex: rail steppers, toolhead steppers) by name"
-    def cmd_STEPPER_GROUP_SWITCH(self, params):
+    cmd_STEPPER_SWITCH_GROUP_help = "Enable/disable one group of steppers (ex: rail steppers, toolhead steppers) by name"
+    def cmd_STEPPER_SWITCH_GROUP(self, params):
         stepper_group = self.hal.get_commander().get_str('GROUP', params, None)
         stepper_enable = self.hal.get_commander().get_int('ENABLE', params, 1)
         self.stepper_linetracker.debug_switch_tracker(stepper_group, stepper_enable)
+    cmd_STEPPER_OFF_help = "Enable/disable all steppers."
+    def cmd_STEPPER_OFF(self, params):
+        self.stepper_linetracker.off()
 
 ATTRS = ("serialport", "baud", "pin_map", "restart_method")
 def load_node_object(hal, node):

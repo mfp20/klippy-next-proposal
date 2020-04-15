@@ -160,7 +160,7 @@ class Manager:
             self.tree.printer.child_get_first("toolhead ")
             return thnode.children["gcode "+thnode.id()].object
     def get_toolhead_child(self, child):
-        parent = child.parent(self, child.name)
+        parent = child.parent(self.tree.printer, child.name)
         if parent.name.startswith("toolhead "):
             return parent.object
         else:
@@ -175,7 +175,7 @@ class Manager:
             thnode = self.tree.printer.child_get_first("toolhead ")
             return thnode.children["gcode "+thnode.id()].object
     def get_gcode_child(self, child):
-        parent = child.parent(self, child.name)
+        parent = child.parent(self.tree.printer, child.name)
         if parent.name.startswith("toolhead "):
             return parent.children["gcode "+parent.name.split(" ")[1]].object
         else:
@@ -190,7 +190,7 @@ class Manager:
             thnode = self.tree.printer.child_get_first("toolhead ")
             return thnode.children["kinematic "+thnode.id()].object
     def get_kinematic_child(self, child):
-        parent = child.parent(self, child.name)
+        parent = child.parent(self.tree.printer, child.name)
         if parent.name.startswith("kinematic "):
             return parent.object
         else:

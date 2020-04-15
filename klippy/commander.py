@@ -188,6 +188,7 @@ class Dispatch(Object):
         # command handling
         self.is_printer_ready = False
         self.commander = {}
+        self.tool = 0
         self.ready = True
     def register(self):
         self.printer.register_event_handler("klippy:ready", self._event_handle_ready)
@@ -234,6 +235,9 @@ class Dispatch(Object):
         commander.respond_info = self.respond_info
         commander.respond_error = self.respond_error
         self.commander[name] = commander
+    def mk_gcode_id(self):
+        self.tool = self.tool + 1
+        return (self.tool-1)
     # request restart
     def request_restart(self, result):
         if self.is_printer_ready:
@@ -437,7 +441,7 @@ class Gcode(Object):
     #self.mm_per_arc_segment = config.getfloat('resolution', 1, above=0.0)
     my_command = [
             'G1', 'G2', 'G4', 'G20', 'G28', 'G90', 'G91', 'G92', 
-            'M18', 'M82', 'M83', 'M105', 'M112', 'M114', 'M115', 'M118', 'M204', 'M220', 'M221', 'M400', 
+            'M18', 'M82', 'M83', 'M104', 'M105', 'M109', 'M112', 'M114', 'M115', 'M118', 'M119', 'M204', 'M220', 'M221', 'M400', 
             'GCODE_SET_OFFSET', 'GCODE_SAVE_STATE', 'GCODE_RESTORE_STATE'
     ]
     def __init__(self, hal, node):
@@ -771,13 +775,35 @@ class Gcode(Object):
     cmd_M18_aliases = ['M84'] # M84 "Disable idle hold"
     def cmd_M18(self, params):
         # Turn off motors
-        self.motor_off()
+        # TODO params
+        self.hal.get_controller().cmd_STEPPER_GROUP_SWITCH(params)
     cmd_M82_help = "Set extruder to absolute mode"
     def cmd_M82(self, params):
         self.absolute_extrude = True
     cmd_M83_help = "Set extruder to relative mode"
     def cmd_M83(self, params):
         self.absolute_extrude = False
+    cmd_M104_help = "Set extrude temperature"
+    cmd_M104_ready_only = True
+    def cmd_M104(self, params, wait=False):
+        gcode = self.printer.lookup_object('base_gcode')
+        temp = gcode.get_float('S', params, 0.)
+        if 'T' in params:
+            index = gcode.get_int('T', params, minval=0)
+            section = 'extruder'
+            if index:
+                section = 'extruder%d' % (index,)
+            extruder = self.printer.lookup_object(section, None)
+            if extruder is None:
+                if temp <= 0.:
+                    return
+                raise gcode.error("Extruder not configured")
+        else:
+            extruder = self.printer.lookup_object('toolhead').get_extruder()
+        heater = extruder.get_heater()
+        heater.set_temp(temp)
+        if wait and temp:
+            gcode.wait_for_temperature(heater)
     cmd_M105_help = "Get extruder temperature"
     cmd_M105_ready_only = True
     def cmd_M105(self, params):
@@ -786,6 +812,10 @@ class Gcode(Object):
             self.ack(msg)
         else:
             self.respond(msg)
+    cmd_M109_help = "Set Extruder Temperature and Wait"
+    cmd_M109_ready_only = True
+    def cmd_M109(self, params):
+        self.cmd_M104(params, wait=True)
     cmd_M112_help = "Full (Emergency) stop"
     cmd_M112_ready_only = True
     def cmd_M112(self, params):
@@ -816,6 +846,10 @@ class Gcode(Object):
             else:
                 msg = ''
             self.gcode.respond("%s %s" %(self.default_prefix, msg))
+    cmd_M119_help = "Get endstop status"
+    cmd_M119_ready_only = True
+    def cmd_M119(self, params):
+        self.hal.get_controller().cmd_SHOW_ENDSTOPS(params)
     cmd_M204_help = "Set default acceleration"
     def cmd_M204(self, params):
         gcode = self.hal.get_gcode()

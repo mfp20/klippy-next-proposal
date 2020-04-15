@@ -271,19 +271,32 @@ class Object(actuator.Object):
         if pin_enable:
             self.pin[self._pin_enable] = pin_enable
 
-    # Register STEPPER_BUZZ command
-#    force_move = printer.try_load_module(config, 'force_move')
-#    force_move.register_stepper(mcu_stepper)
+        # Register STEPPER_BUZZ command
+        #force_move = printer.try_load_module(config, 'force_move')
+        #force_move.register_stepper(mcu_stepper)
 
         # register part
         self.hal.get_controller().register_part(self.node())
         #
         self.ready = True
     def register(self):
-        #self.gcode.register_command('STEPPER_BUZZ', self.cmd_STEPPER_BUZZ, desc=self.cmd_STEPPER_BUZZ_help)
-        #self.gcode.register_mux_command('STEPPER_MOVE', "STEPPER", stepper_name, self.cmd_STEPPER_MOVE, desc=self.cmd_STEPPER_MOVE_help)
-        #self.gcode.register_command('STEPPER_MOVE_FORCE', self.cmd_STEPPER_MOVE_FORCE, desc=self.cmd_STEPPER_MOVE_FORCE_help)
         pass
+    # calculate a move's accel_t, cruise_t, and cruise_v
+    def _calc_move_time(self, dist, speed, accel):
+        axis_r = 1.
+        if dist < 0.:
+            axis_r = -1.
+            dist = -dist
+        if not accel or not dist:
+            return axis_r, 0., dist / speed, speed
+        max_cruise_v2 = dist * accel
+        if max_cruise_v2 < speed**2:
+            speed = math.sqrt(max_cruise_v2)
+        accel_t = speed / accel
+        accel_decel_d = accel_t * speed
+        cruise_t = (dist - accel_decel_d) / speed
+        return axis_r, accel_t, cruise_t, speed
+
     # setup iterative solver for manual stepper
     def manual_solver(self):
         ffi_main, ffi_lib = chelper.get_ffi()
@@ -321,21 +334,7 @@ class Object(actuator.Object):
     def managed_setup(self):
         self.steppers = {}
         self.managed_solver()
-    # calculate a move's accel_t, cruise_t, and cruise_v
-    def _calc_move_time(self, dist, speed, accel):
-        axis_r = 1.
-        if dist < 0.:
-            axis_r = -1.
-            dist = -dist
-        if not accel or not dist:
-            return axis_r, 0., dist / speed, speed
-        max_cruise_v2 = dist * accel
-        if max_cruise_v2 < speed**2:
-            speed = math.sqrt(max_cruise_v2)
-        accel_t = speed / accel
-        accel_decel_d = accel_t * speed
-        cruise_t = (dist - accel_decel_d) / speed
-        return axis_r, accel_t, cruise_t, speed
+
     # MANUAL_STEPPER
     def sync_print_time(self):
         toolhead = self.printer.lookup_object('toolhead')
@@ -400,6 +399,7 @@ class Object(actuator.Object):
         self.sync_print_time()
         if error is not None:
             raise homing.CommandError(error)
+
     # FORCE_MOVE
     def register_stepper(self, stepper):
         name = stepper.get_name()
@@ -446,50 +446,6 @@ class Object(actuator.Object):
         if name not in self.steppers:
             raise self.gcode.error("Unknown stepper %s" % (name,))
         return self.steppers[name]
-    # commands
-    cmd_STEPPER_BUZZ_help = "Oscillate a given stepper to help id it"
-    def cmd_STEPPER_BUZZ(self, params):
-        stepper = self._lookup_stepper(params)
-        logging.info("Stepper buzz %s", stepper.get_name())
-        was_enable = self.force_enable(stepper)
-        toolhead = self.printer.lookup_object('toolhead')
-        dist, speed = BUZZ_DISTANCE, BUZZ_VELOCITY
-        if stepper.units_in_radians():
-            dist, speed = BUZZ_RADIANS_DISTANCE, BUZZ_RADIANS_VELOCITY
-        for i in range(10):
-            self.move_force(stepper, dist, speed)
-            toolhead.dwell(.050)
-            self.move_force(stepper, -dist, speed)
-            toolhead.dwell(.450)
-        self.restore_enable(stepper, was_enable)
-    cmd_STEPPER_MOVE_help = "Manually move a stepper (only at idle, see STEPPER_MOVE_FORCE)"
-    def cmd_STEPPER_MOVE(self, params):
-        if 'ENABLE' in params:
-            self.do_enable(self.gcode.get_int('ENABLE', params))
-        if 'SET_POSITION' in params:
-            setpos = self.gcode.get_float('SET_POSITION', params)
-            self.do_set_position(setpos)
-        sync = self.gcode.get_int('SYNC', params, 1)
-        homing_move = self.gcode.get_int('STOP_ON_ENDSTOP', params, 0)
-        speed = self.gcode.get_float('SPEED', params, self.velocity, above=0.)
-        accel = self.gcode.get_float('ACCEL', params, self.accel, minval=0.)
-        if homing_move:
-            movepos = self.gcode.get_float('MOVE', params)
-            self.do_homing_move(movepos, speed, accel, homing_move > 0, abs(homing_move) == 1)
-        elif 'MOVE' in params:
-            movepos = self.gcode.get_float('MOVE', params)
-            self.do_move(movepos, speed, accel, sync)
-        elif 'SYNC' in params and sync:
-            self.sync_print_time()
-    cmd_STEPPER_MOVE_FORCE_help = "Manually move a stepper; invalidates kinematics"
-    def cmd_STEPPER_MOVE_FORCE(self, params):
-        stepper = self._lookup_stepper(params)
-        distance = self.gcode.get_float('DISTANCE', params)
-        speed = self.gcode.get_float('VELOCITY', params, above=0.)
-        accel = self.gcode.get_float('ACCEL', params, 0., minval=0.)
-        logging.warning("STEPPER_MOVE_FORCE %s distance=%.3f velocity=%.3f accel=%.3f", stepper.get_name(), distance, speed, accel)
-        self.force_enable(stepper)
-        self.move_force(stepper, distance, speed, accel)
 
 ATTRS = ("type", "step_distance")
 ATTRS_PINS = ("pin_step", "pin_dir", "pin_enable")
