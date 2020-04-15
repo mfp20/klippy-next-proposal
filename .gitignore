@@ -6,3 +6,5 @@ out
 klippy/.version
 *.swp
 TODO.*
+*.log
+*.vcd
