@@ -128,9 +128,11 @@ Beagleboneblack_mappings = {
 
 # manages pins on a single board (mcu)
 class Pins:
-    def __init__(self, hal, boardnode, validate_aliases=True):
+    # regex to resolve aliases to pins in commands
+    re_pin = re.compile(r'(?P<prefix>[ _]pin=)(?P<name>[^ ]*)')
+    def __init__(self, hal, name, validate_aliases=True):
         self.hal = hal
-        self._name = boardnode.id()
+        self._name = name
         self.validate_aliases = validate_aliases
         # all pins
         self.id = list()
@@ -269,6 +271,31 @@ class Pins:
             for i in range(len(self.id)):
                 matrix.append(self.get_vector(i))
             return matrix
+    # applies pin_fixup and vector_fixup to all "pin" occurrences in the given command
+    def _command_fixup(self, cmd):
+        # TODO remove vector_fixup, find a better way to setup the Pins matrix
+        def vector_fixup(pin_id, params):
+            indices = [i for i, x in enumerate(self.id) if x == pin_id] 
+            for i in indices:
+                self.function[i] = True
+                self.invert[i] = params["invert"]
+                self.pull[i] = params["pullup"]
+        def pin_fixup(m):
+            name = m.group('name')
+            if name in self.alias:
+                pin_id = self.alias2id(name)
+                pin_params = self.active.pop(name)
+                pin_params["pin"] = pin_id
+                self.active[pin_id] = pin_params
+                vector_fixup(pin_id,pin_params)
+            else:
+                pin_id = name
+                pin_params = self.active[name]
+                vector_fixup(pin_id,pin_params)
+            if pin_id in self.reserved:
+                raise error("pin %s is reserved for %s" % (name, self.reserved[pin_id]))
+            return m.group('prefix') + str(pin_id)
+        return self.re_pin.sub(pin_fixup, cmd)
 
 ######################################################################
 # MCU pin_type's
@@ -702,8 +729,6 @@ class CommandWrapper:
         self._serial.raw_send(cmd, minclock, reqclock, self._cmd_queue)
 
 class MCU:
-    # regex to resolve aliases to pins in commands
-    re_pin = re.compile(r'(?P<prefix>[ _]pin=)(?P<name>[^ ]*)')
     def __init__(self, hal, board, name, clocksync):
         self.hal = hal
         self._board = board
@@ -881,31 +906,6 @@ class MCU:
             if not line:
                 continue
             self.add_config_cmd(line)
-    # applies pin_fixup and vector_fixup to all "pin" occurrences in the given command
-    def _command_fixup(self, cmd):
-        # TODO remove vector_fixup, find a better way to setup the Pins matrix
-        def vector_fixup(pin_id, params):
-            indices = [i for i, x in enumerate(self._board.pins.id) if x == pin_id] 
-            for i in indices:
-                self._board.pins.function[i] = True
-                self._board.pins.invert[i] = params["invert"]
-                self._board.pins.pull[i] = params["pullup"]
-        def pin_fixup(m):
-            name = m.group('name')
-            if name in self._board.pins.alias:
-                pin_id = self._board.pins.alias2id(name)
-                pin_params = self._board.pins.active.pop(name)
-                pin_params["pin"] = pin_id
-                self._board.pins.active[pin_id] = pin_params
-                vector_fixup(pin_id,pin_params)
-            else:
-                pin_id = name
-                pin_params = self._board.pins.active[name]
-                vector_fixup(pin_id,pin_params)
-            if pin_id in self._board.pins.reserved:
-                raise error("pin %s is reserved for %s" % (name, self._board.pins.reserved[pin_id]))
-            return m.group('prefix') + str(pin_id)
-        return self.re_pin.sub(pin_fixup, cmd)
     #
     def _send_config(self, prev_crc):
         # Build config commands
@@ -915,9 +915,9 @@ class MCU:
         self._config_cmds.insert(0, "allocate_oids count=%d" % (self._oid_count,))
         #
         for i, cmd in enumerate(self._config_cmds):
-            self._config_cmds[i] = self._command_fixup(cmd)
+            self._config_cmds[i] = self._board.pins._command_fixup(cmd)
         for i, cmd in enumerate(self._init_cmds):
-            self._init_cmds[i] = self._command_fixup(cmd)
+            self._init_cmds[i] = self._board.pins._command_fixup(cmd)
         # Calculate config CRC
         config_crc = zlib.crc32('\n'.join(self._config_cmds)) & 0xffffffff
         self.add_config_cmd("finalize_config crc=%d" % (config_crc,))
@@ -1110,7 +1110,7 @@ class Board(part.Object):
         self.metaconf["custom"] = {"t": "str", "default":""}
         self.metaconf["max_stepper_error"] = {"t": "float", "minval":0., "default":0.000025}
         #
-        self.pins = Pins(self.hal, node)
+        self.pins = Pins(self.hal, self.name)
         self.uarts = collections.OrderedDict()
         self.i2cs = collections.OrderedDict()
         self.spis = collections.OrderedDict()

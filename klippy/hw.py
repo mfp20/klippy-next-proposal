@@ -4,7 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, sys, collections, cPickle as pickle
+import logging, sys, collections, importlib, cPickle as pickle
 from StringIO import StringIO
 
 from messaging import msg
@@ -14,17 +14,30 @@ from parts import *
 
 class Manager:
     def __init__(self, printermod, printerobj):
+        # setup printer tree and basic nodes
         self.tree = tree.PrinterTree()
         self.tree.printer.module = printermod
         self.tree.printer.object = printerobj
-        self.tree.printer.child_set(tree.PrinterNode("hal"))
+        self.mk_child("printer", "hal")
+        self.mk_child("printer", "reactor")
+        self.mk_child("printer", "commander")
+        self.mk_child("printer", "controller")
+        self.mk_child("controller", "timing")
+        self.mk_child("controller", "temperature")
+        # add basic modules
         self.tree.printer.children["hal"].module = sys.modules[__name__]
+        for n in ["reactor", "commander", "controller", "timing", "temperature"]:
+            self.node(n).module = importlib.import_module(n)
+        # add minimum objects
         self.tree.printer.children["hal"].object = self
-        self.tree.printer.child_set(tree.PrinterNode("reactor"))
         self.node("reactor").object = reactor.Reactor(self, self.node("reactor"))
+        # known parts and composites
         self.pgroups = ["mcu", "virtual", "sensor", "stepper", "heater", "cooler", "nozzle"]
         self.cgroups = ["tool", "cart", "rail"]
+        # ready mcu count
         self.mcu_count = 0
+    def mk_child(self, parentname, childname):
+        self.node(parentname).child_set(tree.PrinterNode(childname))
     def register(self):
         self.get_commander().register_command('SHOW_PRINTER', self.tree.cmd_SHOW_PRINTER, desc=self.tree.cmd_SHOW_PRINTER_help)
     def add_pgroup(self, pgroup):
@@ -76,7 +89,6 @@ class Manager:
     def load_tree_objects(self):
         #logging.debug(self.show(plus="module"))
         logging.debug("- Loading printer objects.")
-        # create basic objects
         self.obj_load("commander")
         self.obj_load("controller")
         self.obj_load("timing")

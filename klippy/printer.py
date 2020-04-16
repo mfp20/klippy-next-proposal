@@ -263,13 +263,6 @@ class Composer:
         for c in composites:
             parts[c] = composites[c]
         del(composites)
-        # build tree: basic modules
-        self.mk_child("printer", "commander")
-        self.mk_child("printer", "controller")
-        self.mk_child("controller", "timing")
-        self.mk_child("controller", "temperature")
-        for n in ["reactor", "commander", "controller", "timing", "temperature"]:
-            self.hal.node(n).module = importlib.import_module(n)
         # adding parts and composites nodes.
         for a in config.getsection("printer").fileconfig.options("printer"):
             if a in self.pgroups or a in self.cgroups:
@@ -301,8 +294,6 @@ class Composer:
             self.hal.tree.spare.children[i] = parts.pop(i)
     def mk(self, name):
         return tree.PrinterNode(name)
-    def mk_child(self, parentname, childname):
-        self.hal.node(parentname).child_set(self.mk(childname))
     def compose(self, composite, config, parts, composites):
         section = config.get_prefix_sections(composite.name)
         for o in config.fileconfig.options(composite.name):

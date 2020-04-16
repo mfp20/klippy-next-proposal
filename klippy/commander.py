@@ -40,8 +40,8 @@ class Object(part.Object):
         # command handling
         self.command_handler = {}
         self.command_help = {}
-        self.ready_only = []
-        self.mux_commands = {}
+        self.ready_only = {}
+        self.command = {}
     def register(self):
         for cmd in self.object_command:
             func = getattr(self, 'cmd_' + cmd)
@@ -51,7 +51,7 @@ class Object(part.Object):
             for a in getattr(self, 'cmd_' + cmd + '_aliases', []):
                 self.register_command(a, func, wnr)
     # command and params, parsing and manipulation
-    def is_traditional_gcode(self, cmd):
+    def _is_traditional_gcode(self, cmd):
         # A "traditional" g-code command is a letter and followed by a number
         try:
             cmd = cmd.upper().split()[0]
@@ -59,7 +59,7 @@ class Object(part.Object):
             return cmd[0].isupper() and cmd[1].isdigit()
         except:
             return False
-    def get_extended_params(self, params):
+    def _get_extended_params(self, params):
         m = self.extended_r.match(params['#original'])
         if m is None:
             raise self.error("Malformed command '%s'" % (params['#original'],))
@@ -74,32 +74,41 @@ class Object(part.Object):
     def get_str(self, name, params, default=sentinel, parser=str, minval=None, maxval=None, above=None, below=None):
         if name not in params:
             if default is self.sentinel:
-                raise self.error("Error on '%s': missing %s" % (params['#original'], name))
+                raise error("Error on '%s': missing %s" % (params['#original'], name))
             return default
         try:
             value = parser(params[name])
         except:
-            raise self.error("Error on '%s': unable to parse %s" % (params['#original'], params[name]))
+            raise error("Error on '%s': unable to parse %s" % (params['#original'], params[name]))
         if minval is not None and value < minval:
-            raise self.error("Error on '%s': %s must have minimum of %s" % (params['#original'], name, minval))
+            raise error("Error on '%s': %s must have minimum of %s" % (params['#original'], name, minval))
         if maxval is not None and value > maxval:
-            raise self.error("Error on '%s': %s must have maximum of %s" % (params['#original'], name, maxval))
+            raise error("Error on '%s': %s must have maximum of %s" % (params['#original'], name, maxval))
         if above is not None and value <= above:
-            raise self.error("Error on '%s': %s must be above %s" % (params['#original'], name, above))
+            raise error("Error on '%s': %s must be above %s" % (params['#original'], name, above))
         if below is not None and value >= below:
-            raise self.error("Error on '%s': %s must be below %s" % (params['#original'], name, below))
+            raise error("Error on '%s': %s must be below %s" % (params['#original'], name, below))
         return value
     def get_int(self, name, params, default=sentinel, minval=None, maxval=None):
         return self.get_str(name, params, default, parser=int, minval=minval, maxval=maxval)
     def get_float(self, name, params, default=sentinel, minval=None, maxval=None, above=None, below=None):
         return self.get_str(name, params, default, parser=float, minval=minval, maxval=maxval, above=above, below=below)
+    def _demux_func(self, params):
+        key, values = self.command[params['#command']]
+        if None in values:
+            key_param = self.get_str(key, params, None)
+        else:
+            key_param = self.get_str(key, params)
+        if key_param not in values:
+            raise error("The value '%s' is not valid for %s" % (key_param, key))
+        values[key_param](params)
     # (un)register command
-    def register_command(self, cmd, func, ready_only=False, desc=None):
+    def register_command(self, cmd, func, ready=False, desc=None):
         # if func == None, removes and returns
         if func is None:
             old_cmd = self.command_handler.get(cmd)
             if cmd in self.ready_only:
-                self.ready_only.remove(cmd)
+                self.ready_only.pop(cmd)
             if cmd in self.command_handler:
                 self.command_handler.pop(cmd)
             return old_cmd
@@ -107,32 +116,25 @@ class Object(part.Object):
         if cmd in self.command_handler:
             raise error("command %s already registered" % (cmd,))
         # check extended params
-        if not self.is_traditional_gcode(cmd):
+        if not self._is_traditional_gcode(cmd):
             origfunc = func
             func = lambda params: origfunc(self._get_extended_params(params))
         # add command handler
         self.command_handler[cmd] = func
-        # add read_only flag
-        if ready_only:
-            self.ready_only.append(cmd)
+        # add ready flag
+        if ready:
+            self.ready_only[cmd] = True
         # add help (if any)
         if desc is not None:
             self.command_help[cmd] = desc
-    # mux commands
-    def _cmd_mux(self, params):
-        key, values = self.mux_commands[params['#command']]
-        if None in values:
-            key_param = self.get_str(key, params, None)
-        else:
-            key_param = self.get_str(key, params)
-        if key_param not in values:
-            raise self.error("The value '%s' is not valid for %s" % (key_param, key))
-        values[key_param](params)
-    def register_mux_command(self, cmd, key, value, func, desc=None):
-        prev = self.mux_commands.get(cmd)
+    # (un)register parametric command: a command having the same key with multiple values
+    # Example:  to turn off one stepper, the command must have the key "stepper"
+    #           and values can be 1 for every registered stepper
+    def register_command_mux(self, cmd, func, key, value, ready=False, desc=None):
+        prev = self.command.get(cmd)
         if prev is None:
-            self.register_command(cmd, self._cmd_mux, desc=desc)
-            self.mux_commands[cmd] = prev = (key, {})
+            self.register_command(cmd, self._demux_func, ready, desc)
+            self.command[cmd] = prev = (key, {})
         prev_key, prev_values = prev
         if prev_key != key:
             raise error("mux command %s %s %s may have only one key (%s)" % (cmd, key, value, prev_key))
@@ -181,7 +183,7 @@ class Dispatch(Object):
         self.is_fileinput = not not self.printer.get_start_args().get("debuginput")
         self.fd_handle = None
         if not self.is_fileinput:
-            self.fd_handle = self.reactor.register_fd(self.fd, self.process_data)
+            self.fd_handle = self.reactor.register_fd(self.fd, self._process_data)
         self.partial_input = ""
         self.pending_commands = []
         self.bytes_read = 0
@@ -247,37 +249,42 @@ class Dispatch(Object):
             self.toolhead.wait_moves()
         self.printer.request_exit(result)
     # Parse input into commands
-    def process_commands(self, commands, need_ack=True):
+    def _process_commands(self, commands, need_ack=True):
         for line in commands:
-            # Ignore comments and leading/trailing spaces
+            # parse: ignore comments and leading/trailing spaces
             line = origline = line.strip()
             cpos = line.find(';')
             if cpos >= 0:
                 line = line[:cpos]
-            # Break command into parts
+            # parse: break command into parts
             parts = self.args_r.split(line.upper())[1:]
             params = { parts[i]: parts[i+1].strip() for i in range(0, len(parts), 2) }
             params['#original'] = origline
             if parts and parts[0] == 'N':
-                # Skip line number at start of command
+                # skip line number at start of command
                 del parts[:2]
             if not parts:
-                # Treat empty line as empty command
+                # treat empty line as empty command
                 parts = ['', '']
             params['#command'] = cmd = parts[0] + parts[1].strip()
-            # Invoke handler for command
+            #
             self.need_ack = need_ack
+            # search the handler for given command
             commander = None
             handler = None
+            # search in all commanders
             for c in self.commander:
                 handler = self.commander[c].command_handler.get(cmd)
                 if handler:
                     commander = self.commander[c]
                     break
             if commander:
+                # give the commander the chance to manipulate params
                 params = commander.process_command(params)
             else:
+                # search local handlers, backups to self.cmd_default
                 handler = self.command_handler.get(cmd, self.cmd_default)
+            # invoke handler
             try:
                 handler(params)
             except self.error as e:
@@ -292,8 +299,9 @@ class Dispatch(Object):
                 self.respond_error(msg)
                 if not need_ack:
                     raise
+            # signal ack
             self.ack()
-    def process_data(self, eventtime):
+    def _process_data(self, eventtime):
         # Read input, separate by newline, and add to pending_commands
         try:
             data = os.read(self.fd, 4096)
@@ -434,6 +442,11 @@ class Dispatch(Object):
         prefix = self.gcode.get_str('PREFIX', params, prefix)
         msg = self.gcode.get_str('MSG', params, '')
         self.gcode.respond("%s %s" %(prefix, msg))
+
+class Console(Object):
+    my_command = []
+    def __init__(self, hal, node):
+        Object.__init__(self, hal, node)
 
 # gcode child commander, to use in conjunction with toolheads
 class Gcode(Object):
