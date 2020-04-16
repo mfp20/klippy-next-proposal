@@ -223,28 +223,28 @@ class PrinterNode:
             l.append(child.name)
             self.children_names_deep(l, child)
         return l
-    def show(self, node = None, indent=0):
+    # methods to collect formatted information about the node
+    def show_details_printer(self, node = None, indent = 0):
         if node == None: node = self
-        txt = "\t" * indent + "---\n"
-        txt = txt + "\t" * indent + "* " + node.name.upper() + "\n"
-        for key, value in node.attrs.items():
-            txt = txt + "\t" * (indent+1) + "- " + str(key) + ": " + str(value) + "\n"
-        if len(node.children) < 1: 
-            txt = txt + "\t" * (indent+1) + "* none\n"
-            return txt
-        for k in node.children.keys():
-            txt = txt + "\t" * (indent+1) + "* "+k + "\n"
-        return txt
-    def show_printer(self, node = None, indent = 0):
-        if node == None: node = self
-        txt = ""
         txt = "\t"*(indent+1) + "--------------------- (events)\n"
         for e in sorted(node.object.event_handlers):
             methparts = str(node.object.event_handlers[e]).split(".",1)[1].split("instance", 1)[0].split(" ")
             meth = methparts[2] + "." + methparts[0]
             txt = txt + str('\t' * (indent+1) + "- " + str(e).ljust(30, " ") + meth[1:] + "\n")
         return txt
-    def show_commander(self, node = None, indent = 0):
+    def show_details_hal(self, node = None, indent = 0):
+        if node == None: node = self
+        txt = "\t"*(indent+1) + "----------------- (tree nodes)\n"
+        node = self.children_deep()
+        nodedict = {}
+        for n in node:
+            nodedict[n.name] = n
+        for n in sorted(nodedict):
+            txt = txt + '\t' * (indent+1) + "- " + str(n).ljust(20, " ") + " " + str(nodedict[n].object).split(" ")[0][1:] + "\n"
+        return txt
+    def show_details_reactor(self, node = None, indent = 0):
+        return ""
+    def show_details_commander(self, node = None, indent = 0):
         if node == None: node = self
         txt = "\t"*(indent+2) + "------------------- (commands)\n"
         for cmd in sorted(node.object.command_handler.keys()):
@@ -261,17 +261,7 @@ class PrinterNode:
                     txt = txt + " (ready only)"
                 txt = txt + "\n"
         return txt
-    def show_hal(self, node = None, indent = 0):
-        if node == None: node = self
-        txt = "\t"*(indent+1) + "----------------- (tree nodes)\n"
-        node = self.children_deep()
-        nodedict = {}
-        for n in node:
-            nodedict[n.name] = n
-        for n in sorted(nodedict):
-            txt = txt + '\t' * (indent+1) + "- " + str(n).ljust(20, " ") + " " + str(nodedict[n].object).split(" ")[0][1:] + "\n"
-        return txt
-    def show_controller(self, node = None, indent = 0):
+    def show_details_controller(self, node = None, indent = 0):
         if node == None: node = self
         txt = "\t"*(indent+1) + "\t(part)\t\t\t(pin type)\t\t\t(used pin)\n"
         used = []
@@ -290,7 +280,11 @@ class PrinterNode:
         for part, pin, obj in sorted(used):
             txt = txt + "\t" * (indent+1) + "- " + part.ljust(20, " ") + " " + str(obj).split(" ")[0][1:].ljust(40, " ") + " " + pin + "\n"
         return txt
-    def show_mcu(self, node = None, indent = 0):
+    def show_details_timing(self, node = None, indent = 0):
+        return ""
+    def show_details_temperature(self, node = None, indent = 0):
+        return ""
+    def show_details_mcu(self, node = None, indent = 0):
         if node == None: node = self
         txt = ""
         # registered serial handlers
@@ -312,67 +306,72 @@ class PrinterNode:
                 txt = txt + str("\t" * indent + "\t  " + str(p[0]) + "\t" + str(p[1]) + "\t" + str(p[3]) + "\t" + str(p[4]) + "\t\t" + str(p[2]) + "\n")
         txt = txt + "\t"*(indent+1) + "------------------------------\n"
         return txt
-    def show_deep(self, node = None, indent = 0, plus = ""):
+    # return formatted information about node, additional information:
+    # [module, object, attrs, {children | deep}, details]
+    def show(self, node = None, indent = 0, plus = ""):
         if node == None: node = self
+        options = plus.split(",")
         txt = ""
+        startline = "\t"*indent
+        newline = "\n"
         # add header
-        if "details" in plus.split(","):
-            txt = str("\t" * indent + "---\n")
-        # node name, if requested collect module and object
-        plustxt = ""
-        for p in plus.split(","):
-            if p == "module":
-                if node.module:
-                    plustxt = plustxt+" | "+str(node.module)
-                else:
-                    plustxt = plustxt+" | no module"
-            elif p == "object":
-                if node.object:
-                    plustxt = plustxt+" | "+str(node.object)
-                elif node.name:
-                    if node.name != "spares":
-                        plustxt = plustxt+" | no object"
-            elif p == "attrs":
-                if node.attrs:
-                    plustxt = plustxt+" | "+str(node.attrs)
-                else:
-                    plustxt = plustxt+" | no attrs"
-            elif p == "children":
-                if node.children:
-                    plustxt = plustxt+" | "+str(node.children)
-                else:
-                    plustxt = plustxt+" | no children"
-        txt = txt + str('\t' * indent + "|  * " + node.name.upper().ljust(15, " ") + " " + plustxt + "\n")
+        if "details" in options:
+            txt = txt + startline + "---" + newline
+        # node name, module and object
+        txt = txt + startline + "* " + node.name.upper().ljust(30, " ")
+        if "module" in options:
+            if node.module:
+                txt = txt + " | " + str(str(node.module).split(" ")[1] + " (" + str(node.module).split(" ")[3][:-1]).ljust(15, " ") + ")"
+            else:
+                txt = txt + " | no module".ljust(15, " ")
+        if "object" in options:
+            if node.object:
+                txt = txt + " | " + str(node.object).split(" ")[0][1:].ljust(15, " ")
+            else:
+                if node.name != "spares":
+                    txt = txt + " | no object".ljust(15, " ")
+        txt = txt + newline
         # show attrs
-        if "details" in plus.split(","):
+        if "attrs" in options:
             if node.attrs:
                 maxlen = len(max(node.attrs.keys(), key=len))
                 for key, value in node.attrs.items():
-                    txt = txt + str('\t' * (indent+1) + "" + str(key).ljust(maxlen, " ") + ": " + str(value) + "\n")
-        # special nodes, print misc info: printer events, gcode commands, ...
-        if "details" in plus.split(","):
+                    txt = txt + startline + "  - " + str(key).ljust(maxlen, " ") + ": " + str(value) + newline
+        # special nodes, print details: printer events, gcode commands, ...
+        if "details" in options:
             if node.name == "printer" and node.object:
-                txt = txt + self.show_printer(node, indent)
-            elif node.name == "commander" and node.object:
-                txt = txt + self.show_commander(node, indent)
+                txt = txt + self.show_details_printer(node, indent)
             elif node.name == "hal" and node.object:
-                txt = txt + self.show_hal(node, indent)
+                txt = txt + self.show_details_hal(node, indent)
+            elif node.name == "reactor" and node.object:
+                txt = txt + self.show_details_reactor(node, indent)
+            elif node.name == "commander" and node.object:
+                txt = txt + self.show_details_commander(node, indent)
             elif node.name == "controller" and node.object:
-                txt = txt + self.show_controller(node, indent)
+                txt = txt + self.show_details_controller(node, indent)
+            elif node.name == "timing" and node.object:
+                txt = txt + self.show_details_timing(node, indent)
+            elif node.name == "temperature" and node.object:
+                txt = txt + self.show_details_temperature(node, indent)
             elif node.name.startswith("mcu ") and node.object:
-                txt = txt + self.show_mcu(node, indent)
+                txt = txt + self.show_details_mcu(node, indent)
         # show children
-        for key, value in node.children.items():
-            txt = txt + self.show_deep(value, indent+1, plus)
+        if "children" in options:
+            if len(node.children) < 1: 
+                txt = txt + startline + "\t* none" + newline
+                return txt
+            for k in node.children.keys():
+                txt = txt + startline + "\t* "+ k + newline
+        elif "deep" in options:
+            for key, value in node.children.items():
+                txt = txt + self.show(value, indent+1, plus)
+        #
         return txt
 
 class PrinterTree:
     def __init__(self): 
         self.printer = PrinterNode("printer")
         self.spare = PrinterNode("spares")
-    def show(self, indent = 0, plus = ""):
-        return self.printer.show_deep(self.printer, indent, plus) + "\n" + self.printer.show(self.spare, indent)
-    cmd_SHOW_PRINTER_help = "Shows the printer tree and some additional info in console."
-    def cmd_SHOW_PRINTER(self):
-        self.respond_info("\n".join(self.show(2)), log=False)
+    def show(self, indent = 0):
+        return self.printer.show(None, indent, "deep") + "\n" + self.spare.show(None, indent, "deep")
 

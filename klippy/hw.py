@@ -39,7 +39,12 @@ class Manager:
     def mk_child(self, parentname, childname):
         self.node(parentname).child_set(tree.PrinterNode(childname))
     def register(self):
-        self.get_commander().register_command('SHOW_PRINTER', self.tree.cmd_SHOW_PRINTER, desc=self.tree.cmd_SHOW_PRINTER_help)
+        self.get_commander().register_command('SHOW_NODE', self.cmd_SHOW_NODE, desc=self.cmd_SHOW_NODE_help)
+        self.get_commander().register_command('SHOW_NODE_DETAILED', self.cmd_SHOW_NODE_DETAILED, desc=self.cmd_SHOW_NODE_DETAILED_help)
+        self.get_commander().register_command('SHOW_BRANCH', self.cmd_SHOW_BRANCH, desc=self.cmd_SHOW_BRANCH_help)
+        self.get_commander().register_command('SHOW_BRANCH_DETAILED', self.cmd_SHOW_BRANCH_DETAILED, desc=self.cmd_SHOW_BRANCH_DETAILED_help)
+        self.get_commander().register_command('SHOW_TREE', self.cmd_SHOW_TREE, desc=self.cmd_SHOW_TREE_help)
+        self.get_commander().register_command('SHOW_TREE_DETAILED', self.cmd_SHOW_TREE_DETAILED, desc=self.cmd_SHOW_TREE_DETAILED_help)
     def add_pgroup(self, pgroup):
         self.pgroups.append(pgroup)
     def add_cgroup(self, cgroup):
@@ -87,7 +92,7 @@ class Manager:
         in_s = StringIO(obj)
         return pickle.load(in_s)
     def load_tree_objects(self):
-        #logging.debug(self.show(plus="module"))
+        #logging.debug(self.show("printer", plus="module,deep"))
         logging.debug("- Loading printer objects.")
         self.obj_load("commander")
         self.obj_load("controller")
@@ -104,7 +109,7 @@ class Manager:
                     logging.warning("\t\t- CAN'T LOAD '..:%s:%s'. Moving to spares.", node.parent(self.tree.printer, node.name).name, node.name)
                     self.tree.spare.children[node.name] = parent.children.pop(node.name)
         # build/configure (if needed) each printer shallow children
-        #logging.debug(self.show(plus="object"))
+        #logging.debug(self.show("printer", plus="object,deep"))
         logging.debug("- Building and configuring objects.")
         for name,node in self.tree.printer.children.items():
             if node.name != "reactor" \
@@ -148,7 +153,7 @@ class Manager:
         # load printer's sniplets, development code to be tested
         logging.debug("- Autoloading extra printlets.")
         self.get_printer().try_autoload_printlets(self)
-        #logging.debug(self.show(plus="object"))
+        #logging.debug(self.show("printer", plus="attrs,details,deep"))
     # wrappers
     def get_printer(self):
         return self.node("printer").object
@@ -210,8 +215,38 @@ class Manager:
                 return None
             return self.get_kinematic_child(parent)
     # misc
-    def show(self, indent=2, plus = ""):
-        return self.tree.show(indent, plus)
+    def show(self, nodename, indent=0, plus = "attrs,children"):
+        return self.node(nodename).show(None, indent, plus)
+    def show_tree(self, indent=0):
+        return self.tree.show(indent)
     def ready(self):
-        logging.debug(self.show(plus="details"))
+        logging.debug(self.tree.printer.show(plus="attrs,details,deep")+self.tree.spare.show(plus="deep"))
+    cmd_SHOW_NODE_help = "Shows information about one printer tree node."
+    def cmd_SHOW_NODE(self, params):
+        # TODO
+        nodename = "???"
+        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,children")), log=False)
+    cmd_SHOW_NODE_DETAILED_help = "Shows information about one printer tree node. All details."
+    def cmd_SHOW_NODE_DETAILED(self, params):
+        # TODO
+        nodename = "???"
+        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,children,details")), log=False)
+    cmd_SHOW_BRANCH_help = "Shows information about one tree branch."
+    def cmd_SHOW_BRANCH(self, params):
+        # TODO
+        nodename = "???"
+        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,deep")), log=False)
+    cmd_SHOW_BRANCH_DETAILED_help = "Shows information about one tree branch. All details."
+    def cmd_SHOW_BRANCH_DETAILED(self, params):
+        # TODO
+        nodename = "???"
+        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,details,deep")), log=False)
+    cmd_SHOW_TREE_help = "Shows the printer tree."
+    def cmd_SHOW_TREE(self, params):
+        # TODO
+        self.get_commander().respond_info("\n".join(self.tree.show()), log=False)
+    cmd_SHOW_TREE_DETAILED_help = "Shows the printer tree. All details."
+    def cmd_SHOW_TREE_DETAILED(self, params):
+        # TODO
+        self.get_commander().respond_info("\n".join(self.tree.printer.show(plus="attrs,details,deep")+self.tree.spare.show(plus="deep")), log=False)
 

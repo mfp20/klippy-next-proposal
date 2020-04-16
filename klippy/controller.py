@@ -1521,10 +1521,12 @@ class Object(composite.Object):
     # commands handlers
     cmd_SHOW_PINS_ALL_help = "Shows all pins."
     def cmd_SHOW_PINS_ALL(self):
-        self.hal.get_gcode().respond_info(self.pin_dict(), log=False)
+        # TODO
+        self.hal.get_commander().respond_info(self.pin_dict(), log=False)
     cmd_SHOW_PINS_ACTIVE_help = "Shows active pins."
     def cmd_SHOW_PINS_ACTIVE(self):
-        self.hal.get_gcode().respond_info(self.pin_active_dict(), log=False)
+        # TODO
+        self.hal.get_commander().respond_info(self.pin_active_dict(), log=False)
     cmd_SHOW_ADC_VALUE_help = "Report the last value of an analog pin"
     def cmd_SHOW_ADC_VALUE(self, params):
         # TODO

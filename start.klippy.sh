@@ -15,7 +15,7 @@ fi
 
 /home/user/klippy-env/bin/python klippy/klippy.py ${CFG} -l klippy.log -v ${GCODE} &
 
-sleep 1
+sleep 0.1
 
 tail -f klippy.log
 
