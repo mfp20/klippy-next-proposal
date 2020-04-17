@@ -1,71 +1,57 @@
-#!/usr/bin/env python2
-# Script to implement a test console with firmware over serial port
+# command console for klippy
 #
-# Copyright (C) 2016,2017  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import sys, optparse, os, re, logging
-import hw, reactor, serialhdl, controller, util, msgproto, timing
 
-help_txt = """
-  This is a debugging console for the Klipper micro-controller.
-  In addition to mcu commands, the following artificial commands are
-  available:
-    PINS  : Load pin name aliases (eg, "PINS arduino")
-    DELAY : Send a command at a clock time (eg, "DELAY 9999 get_uptime")
-    FLOOD : Send a command many times (eg, "FLOOD 22 .01 get_uptime")
-    SUPPRESS : Suppress a response message (eg, "SUPPRESS analog_in_state 4")
-    SET   : Create a local variable (eg, "SET myvar 123.4")
-    STATS : Report serial statistics
-    LIST  : List available mcu commands, local commands, and local variables
-    HELP  : Show this text
-  All commands also support evaluation by enclosing an expression in { }.
-  For example, "reset_step_clock oid=4 clock={clock + freq}".  In addition
-  to user defined variables (via the SET command) the following builtin
-  variables may be used in expressions:
-    clock : The current mcu clock time (as estimated by the host)
-    freq  : The mcu clock frequency
-"""
+import logging, os, sys, cmd, re
+from messaging import msg
+from messaging import Kerr as error
+import msgproto
 
-re_eval = re.compile(r'\{(?P<eval>[^}]*)\}')
-
-class KeyboardReader:
-    def __init__(self, ser, hal):
-        self.ser = ser
+# commander's shell, base class
+class ObjectShell(cmd.Cmd):
+    __hiden_methods = ('do_EOF',)
+    intro = None
+    prompt = None
+    def __init__(self, hal, node):
+        cmd.Cmd.__init__(self)
         self.hal = hal
+        self.node = node
+    # disable repetition of last command on empty line
+    def emptyline(self):
+        pass
+    # hide some methods from help and completion
+    def get_names(self):
+        return [n for n in dir(self.__class__) if n not in self.__hiden_methods]
+    # exit from console
+    def do_exit(self, arg):
+        return True
+    def help_exit(self):
+        print "Exit this (sub-)console."
+        print "You can also use the Ctrl-D shortcut."
+    do_EOF = do_exit
+
+# MCU sub-console
+class MCUShell(ObjectShell):
+    re_eval = re.compile(r'\{(?P<eval>[^}]*)\}')
+    def __init__(self, hal, node):
+        ObjectShell.__init__(self, hal, node)
+        self.name = node.id()
+        self.pins = node.object.pins
+        self.mcu = node.object.mcu
+        self.intro = "\n * MCU '%s' command console. Type 'help' or '?' to list currently available commands.\n" % self.name
+        #
         self.reactor = self.hal.get_reactor()
         self.clocksync = self.hal.get_timing()
-        self.pins = controller.Pins(self.hal, "mcu", validate_aliases=False)
+        self.ser = self.mcu._serial
         self.start_time = self.reactor.monotonic()
-        self.fd = sys.stdin.fileno()
-        util.set_nonblock(self.fd)
-        self.mcu_freq = 0
+        self.mcu_freq = 0.
         self.data = ""
-        self.reactor.register_fd(self.fd, self.process_kbd)
-        self.reactor.register_callback(self.connect)
-        self.local_commands = {
-            "PINS": self.command_PINS, "SET": self.command_SET,
-            "DELAY": self.command_DELAY, "FLOOD": self.command_FLOOD,
-            "SUPPRESS": self.command_SUPPRESS, "STATS": self.command_STATS,
-            "LIST": self.command_LIST, "HELP": self.command_HELP,
-        }
         self.eval_globals = {}
-    def connect(self, eventtime):
-        self.output(help_txt)
-        self.output("="*20 + " attempting to connect " + "="*20)
-        self.ser.connect()
-        msgparser = self.ser.get_msgparser()
-        self.output("Loaded %d commands (%s / %s)" % (
-            len(msgparser.messages_by_id),
-            msgparser.version, msgparser.build_versions))
-        self.output("MCU config: %s" % (" ".join(
-            ["%s=%s" % (k, v) for k, v in msgparser.config.items()])))
-        self.clocksync.connect(self.ser)
-        self.ser.handle_default = self.handle_default
-        self.ser.register_response(self.handle_output, '#output')
-        self.mcu_freq = msgparser.get_constant_float('CLOCK_FREQ')
-        self.output("="*20 + "       connected       " + "="*20)
-        return self.reactor.NEVER
+        self.connected = False
+    #
+    # helpers
     def output(self, msg):
         sys.stdout.write("%s\n" % (msg,))
         sys.stdout.flush()
@@ -78,79 +64,23 @@ class KeyboardReader:
         self.output("%07.3f: %s: %s" % (tdiff, params['#name'], params['#msg']))
     def handle_suppress(self, params):
         pass
+    def connect(self):
+        # backups the printer's serial default handle, restores on disconnect
+        self.handle_default_backup = self.ser.handle_default
+        # 
+        msgparser = self.ser.get_msgparser()
+        self.output("Loaded %d commands (%s / %s)" % (len(msgparser.messages_by_id), msgparser.version, msgparser.build_versions))
+        self.output("MCU config: %s" % (" ".join(["%s=%s" % (k, v) for k, v in msgparser.config.items()])))
+        self.ser.handle_default = self.handle_default
+        self.ser.register_response(self.handle_output, '#output')
+        self.mcu_freq = msgparser.get_constant_float('CLOCK_FREQ')
+        self.connected = True
+        return self.reactor.NEVER
     def update_evals(self, eventtime):
         self.eval_globals['freq'] = self.mcu_freq
         self.eval_globals['clock'] = self.clocksync.get_clock(eventtime)
-    def command_PINS(self, parts):
-        mcu_type = self.ser.get_msgparser().get_constant('MCU')
-        self.pins.map(mcu_type, parts[1])
-    def command_SET(self, parts):
-        val = parts[2]
-        try:
-            val = float(val)
-        except ValueError:
-            pass
-        self.eval_globals[parts[1]] = val
-    def command_DELAY(self, parts):
-        try:
-            val = int(parts[1])
-        except ValueError as e:
-            self.output("Error: %s" % (str(e),))
-            return
-        try:
-            self.ser.send(' '.join(parts[2:]), minclock=val)
-        except msgproto.error as e:
-            self.output("Error: %s" % (str(e),))
-            return
-    def command_FLOOD(self, parts):
-        try:
-            count = int(parts[1])
-            delay = float(parts[2])
-        except ValueError as e:
-            self.output("Error: %s" % (str(e),))
-            return
-        msg = ' '.join(parts[3:])
-        delay_clock = int(delay * self.mcu_freq)
-        msg_clock = int(self.clocksync.get_clock(self.reactor.monotonic())
-                        + self.mcu_freq * .200)
-        try:
-            for i in range(count):
-                next_clock = msg_clock + delay_clock
-                self.ser.send(msg, minclock=msg_clock, reqclock=next_clock)
-                msg_clock = next_clock
-        except msgproto.error as e:
-            self.output("Error: %s" % (str(e),))
-            return
-    def command_SUPPRESS(self, parts):
-        oid = None
-        try:
-            name = parts[1]
-            if len(parts) > 2:
-                oid = int(parts[2])
-        except ValueError as e:
-            self.output("Error: %s" % (str(e),))
-            return
-        self.ser.register_response(self.handle_suppress, name, oid)
-    def command_STATS(self, parts):
-        curtime = self.reactor.monotonic()
-        self.output(' '.join([self.ser.stats(curtime),
-                              self.clocksync.stats(curtime)]))
-    def command_LIST(self, parts):
-        self.update_evals(self.reactor.monotonic())
-        mp = self.ser.get_msgparser()
-        out = "Available mcu commands:"
-        out += "\n  ".join([""] + sorted([
-            mp.messages_by_id[i].msgformat for i in mp.command_ids]))
-        out += "\nAvailable artificial commands:"
-        out += "\n  ".join([""] + [n for n in sorted(self.local_commands)])
-        out += "\nAvailable local variables:"
-        lvars = sorted(self.eval_globals.items())
-        out += "\n  ".join([""] + ["%s: %s" % (k, v) for k, v in lvars])
-        self.output(out)
-    def command_HELP(self, parts):
-        self.output(help_txt)
     def translate(self, line, eventtime):
-        evalparts = re_eval.split(line)
+        evalparts = self.re_eval.split(line)
         if len(evalparts) > 1:
             self.update_evals(eventtime)
             try:
@@ -169,49 +99,230 @@ class KeyboardReader:
         except:
             self.output("Unable to map pin: %s" % (line,))
             return None
-        if line:
-            parts = line.split()
-            if parts[0] in self.local_commands:
-                self.local_commands[parts[0]](parts)
-                return None
         return line
-    def process_kbd(self, eventtime):
-        self.data += os.read(self.fd, 4096)
-
-        kbdlines = self.data.split('\n')
-        for line in kbdlines[:-1]:
-            line = line.strip()
-            cpos = line.find('#')
-            if cpos >= 0:
-                line = line[:cpos]
-                if not line:
-                    continue
-            msg = self.translate(line.strip(), eventtime)
-            if msg is None:
-                continue
-            try:
-                self.ser.send(msg)
-            except msgproto.error as e:
-                self.output("Error: %s" % (str(e),))
-        self.data = kbdlines[-1]
-
-def main():
-    usage = "%prog [options] <serialdevice> <baud>"
-    opts = optparse.OptionParser(usage)
-    options, args = opts.parse_args()
-    serialport, baud = args
-    baud = int(baud)
-    logging.basicConfig(level=logging.DEBUG)
+    def disconnect(self):
+        # cleanup
+        self.ser.register_response(None, '#output')
+        self.ser.handle_default = self.handle_default_backup
+        self.connected = False
     #
-    hal = hw.Manager(sys.modules[__name__], None)
-    hal.obj_load("controller")
-    hal.obj_load("timing")
-    ser = serialhdl.SerialReader(hal.get_reactor(), serialport, baud)
-    kbd = KeyboardReader(ser, hal)
-    try:
-        hal.get_reactor().run()
-    except KeyboardInterrupt:
-        sys.stdout.write("\n")
+    # commands
+    def do_help(self, arg):
+        'List available commands with "help" or detailed help with "help cmd".'
+        # print custom help intro
+        help_txt = """
+Intro
+=====
+This is a mcu debugging console for the Klipper micro-controller.
+The "connect" command is automatically issued once at first given command
+to collect all handles and information. Disconnect is automatic on exit.
 
-if __name__ == '__main__':
-    main()
+In addition to console commands, you can issue mcu commands.
+Example: "get_uptime".
+All commands also support evaluation by enclosing an expression in { }.
+Example: "reset_step_clock oid=4 clock={clock + freq}"
+In addition to user defined variables (via the SET command) 
+the following builtin variables may be used in expressions:
+    clock : The current mcu clock time (as estimated by the host).
+    freq  : The mcu clock frequency.
+"""
+        if arg == "":
+            print help_txt
+        # print default help
+        ObjectShell.do_help(self,arg)
+        if arg != "":
+            return
+        # list available mcu commands and local variables
+        self.update_evals(self.reactor.monotonic())
+        mp = self.ser.get_msgparser()
+        out = "Available mcu commands:"
+        out += "\n======================="
+        out += "\n".join([""] + sorted([mp.messages_by_id[i].msgformat for i in mp.command_ids]))
+        out += "\n\nAvailable local variables:"
+        out += "\n=========================="
+        lvars = sorted(self.eval_globals.items())
+        out += "\n  ".join([""] + ["%s: %s" % (k, v) for k, v in lvars])
+        self.output(out)
+    def default(self, arg):
+        if not self.connected:
+            self.connect()
+        msg = self.translate(arg.strip(), self.reactor.monotonic())
+        if msg is None:
+            return
+        try:
+            self.ser.send(msg)
+        except msgproto.error as e:
+            self.output("Error: %s" % (str(e),))
+    def do_connect(self, arg):
+        'Issue this command to collect information about the mcu and grab serial handlers.'
+        self.connect()
+        if self.mcu_freq == 0.:
+            self.output("\nCouldn't connect. Retry.")
+    def do_disconnect(self, arg):
+        'Issue this command to restore handlers and cleanup.'
+        self.disconnect()
+    def do_set(self, arg):
+        'Create a local variable (eg, "set myvar 123.4").'
+        parts = arg.split(" ")
+        val = parts[1]
+        try:
+            val = float(val)
+        except ValueError:
+            pass
+        self.eval_globals[parts[0]] = val
+    def do_delay(self, arg):
+        'Send a command at a clock time (eg, "delay 9999 get_uptime").'
+        parts = arg.split(" ")
+        if not self.connected:
+            self.connect()
+        try:
+            val = int(parts[0])
+        except ValueError as e:
+            self.output("Error: %s" % (str(e),))
+            return
+        try:
+            self.ser.send(' '.join(parts[1:]), minclock=val)
+        except msgproto.error as e:
+            self.output("Error: %s" % (str(e),))
+            return
+    def do_flood(self, arg):
+        'Send a command many times (eg, "flood 22 .01 get_uptime").'
+        parts = arg.split(" ")
+        if not self.connected:
+            self.connect()
+        try:
+            count = int(parts[0])
+            delay = float(parts[1])
+        except ValueError as e:
+            self.output("Error: %s" % (str(e),))
+            return
+        msg = ' '.join(parts[2:])
+        delay_clock = int(delay * self.mcu_freq)
+        msg_clock = int(self.clocksync.get_clock(self.reactor.monotonic()) + self.mcu_freq * .200)
+        try:
+            for i in range(count):
+                next_clock = msg_clock + delay_clock
+                self.ser.send(msg, minclock=msg_clock, reqclock=next_clock)
+                msg_clock = next_clock
+        except msgproto.error as e:
+            self.output("Error: %s" % (str(e),))
+            return
+    def do_suppress(self, arg):
+        'Suppress a response message (eg, "suppress analog_in_state 4").'
+        parts = arg.split(" ")
+        if not self.connected:
+            self.connect()
+        oid = None
+        try:
+            name = parts[0]
+            if len(parts) > 1:
+                oid = int(parts[1])
+        except ValueError as e:
+            self.output("Error: %s" % (str(e),))
+            return
+        self.ser.register_response(self.handle_suppress, name, oid)
+    def do_stats(self, arg):
+        'Report serial statistics.'
+        parts = arg.split(" ")
+        if not self.connected:
+            self.connect()
+        curtime = self.reactor.monotonic()
+        self.output(' '.join([self.ser.stats(curtime), self.clocksync.stats(curtime)]))
+    def do_exit(self, arg):
+        if self.connected:
+            self.disconnect()
+        return ObjectShell.do_exit(self, arg)
+
+# main printer console
+class DispatchShell(ObjectShell):
+    intro = "\n * Klippy command console. Type 'help' or '?' to list currently available commands.\n"
+    prompt = "Klippy > "
+    def __init__(self, hal, node, lock):
+        ObjectShell.__init__(self, hal, node)
+        self.lock = lock
+        self.lock.acquire()
+    # protect from accidental exit
+    def onecmd(self, line):
+        r = ObjectShell.onecmd(self,line)
+        if r and raw_input('\nClose Klippy and return to OS shell? (yes/no):')=='yes':
+            if self.lock.locked():
+                self.lock.release()
+            return True
+        return False
+    # help README
+    def help_README(self):
+        help_txt = """
+            This is the main Klippy console. Exiting this console closes gracefully the whole Klippy app.
+            The console features "tab completion": tapping TAB will complete the current word, double TAB will give you hints.
+            Some commands make you enter sub-consoles, each with its own set of commands. Example: "toolhead" and "mcu".
+            There is also a subset of OS shell commands (ex: ls, cd, cat), just prepend the OS shell command with "!" or "shell",
+            Example: "! ls"
+        """
+        print 'README'
+        print help_txt
+    # shell commands
+    def do_shell(self, arg):
+        'Prepend ! or "shell" to issue an OS command. Only a small subset of shell commands are available.'
+        available = ['pwd', 'ls', 'cd', 'cat']
+        invoke = False
+        for c in available:
+            if arg.startswith(c):
+                invoke = True
+                break
+        if invoke:
+            os.system(arg)
+        else:
+            print "Command '%s' not allowed." % arg
+            print "Allowed commands: %s" % str(available)
+    # enter mcu shell
+    def do_mcu(self, arg):
+        'MCU sub-console. To exit just type "exit" and you will be back to main Klippy console.'
+        node = self.hal.node("mcu "+arg)
+        if node != None:
+            sh = MCUShell(self.hal, node)
+            sh.prompt = "Klippy:mcu "+node.id()+" > "
+            sh.cmdloop()
+        else:
+            print "MCU '%s' doesn't exist." % arg
+    def complete_mcu(self, text, line, begidx, endidx):
+        return [i for i in self.hal.get_controller().board.keys()]
+    def do_continue(self, arg):
+        '''Allow the printer to run. This command can be issued once only.
+        When Klippy runs with this command console, the printer startup process
+        is blocked right after mcu_identify, before mcu(s) connection, 
+        in order to allow the operator to use the mcu sub-console before normal printer connect.
+        When this command is issued, the printer resume normal startup process.
+        After the printer resumed normal operation, in order to access pristine mcu status
+        you will need to restart the printer first.'''
+        if self.lock.locked():
+            self.lock.release()
+    # enter toolhead shell
+    def do_toolhead(self, arg):
+        'Toolhead sub-console. To exit just type "exit" and you will be back to main Klippy console.'
+        node = self.hal.node("gcode "+arg)
+        if node != None:
+            sh = GcodeShell(self.hal, node)
+            sh.prompt = "Klippy:toolhead "+node.id()+" > "
+            sh.cmdloop(intro=None)
+        else:
+            print "Toolhead '%s' doesn't exist." % arg
+    def complete_toolhead(self, text, line, begidx, endidx):
+        return [i.split(" ")[1] for i in self.node.object.commander if i.split(" ")[1].startswith(text)]
+    def do_restart(self, arg):
+        'Restart Klippy ASAP.'
+        if self.lock.locked():
+            self.lock.release()
+        self.node.object.request_restart("restart")
+    def do_reload(self, arg):
+        'Restart Klippy ASAP and reload configuration.'
+        if self.lock.locked():
+            self.lock.release()
+        self.node.object.request_restart("reload")
+
+# each toolhead has one of these
+class GcodeShell(ObjectShell):
+    def __init__(self, hal, node):
+        ObjectShell.__init__(self, hal, node)
+        self.name = node.id()
+        self.intro = "\n* Toolhead '%s' command console. Type 'help' or '?' to list currently available commands.\n" % self.name
+

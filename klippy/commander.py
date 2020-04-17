@@ -10,15 +10,15 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, re, collections, os
+import logging, re, collections, os, threading
 from messaging import msg
 from messaging import Kerr as error
-import part
+import part, console
 
 class sentinel:
     pass
 
-# base class
+# commander, base class
 class Object(part.Object):
     respond_types = { 'echo': 'echo:', 'command': '//', 'error' : '!!'}
     object_command = ["UNKNOWN", "IGNORE", "ECHO"]
@@ -62,7 +62,7 @@ class Object(part.Object):
     def _get_extended_params(self, params):
         m = self.extended_r.match(params['#original'])
         if m is None:
-            raise self.error("Malformed command '%s'" % (params['#original'],))
+            raise error("Malformed command '%s'" % (params['#original'],))
         eargs = m.group('args')
         try:
             eparams = [earg.split('=', 1) for earg in shlex.split(eargs)]
@@ -70,7 +70,7 @@ class Object(part.Object):
             eparams.update({k: params[k] for k in params if k.startswith('#')})
             return eparams
         except ValueError as e:
-            raise self.error("Malformed command '%s'" % (params['#original'],))
+            raise error("Malformed command '%s'" % (params['#original'],))
     def get_str(self, name, params, default=sentinel, parser=str, minval=None, maxval=None, above=None, below=None):
         if name not in params:
             if default is self.sentinel:
@@ -191,6 +191,13 @@ class Dispatch(Object):
         self.is_printer_ready = False
         self.commander = {}
         self.tool = 0
+        # spawn a thread to run printer's interactive console
+        self.start_args = self.hal.get_printer().get_start_args()
+        if 'printerconsole' in self.start_args:
+            self.console = console.DispatchShell(self.hal, self.node(), self.start_args['printerconsole_lock'])
+            self._console_th = threading.Thread(name="printerconsole", target=self._console_run)
+            self._console_th.start()
+            logging.debug("- Klippy command console started.")
         self.ready = True
     def register(self):
         self.printer.register_event_handler("klippy:ready", self._event_handle_ready)
@@ -214,10 +221,18 @@ class Dispatch(Object):
         for c in self.commander:
             out.append(self.commander[c]._dump_debug())
         logging.info("\n".join(out))
+    def _console_run(self):
+        self.console.cmdloop()
+        self.hal.get_printer().request_exit('exit')
     def _event_handle_ready(self):
         self.is_printer_ready = True
+        #
         if self.is_fileinput and self.fd_handle is None:
             self.fd_handle = self.reactor.register_fd(self.fd, self._process_data)
+        # change console prompt
+        if 'printerconsole' in self.start_args:
+            self.console.prompt = "(ready) "
+        # respond
         self._respond_state("Ready")
     def _event_handle_shutdown(self):
         if not self.is_printer_ready:
@@ -226,8 +241,16 @@ class Dispatch(Object):
         self._dump_debug()
         if self.is_fileinput:
             self.printer.request_exit('error_exit')
+        # change console prompt
+        if 'printerconsole' in self.start_args:
+            self.console.prompt = "(shutdown) "
+        # respond
         self._respond_state("Shutdown")
     def _event_handle_disconnect(self):
+        # close printerconsole
+        if 'printerconsole' in self.start_args:
+            self.console.prompt = "(disconnect) "
+        #
         self._respond_state("Disconnect")
     # (un)register a child commander
     def register_commander(self, name, commander):
@@ -287,7 +310,7 @@ class Dispatch(Object):
             # invoke handler
             try:
                 handler(params)
-            except self.error as e:
+            except error as e:
                 self.respond_error(str(e))
                 self.printer.send_event("commander:command_error")
                 if not need_ack:
@@ -443,20 +466,14 @@ class Dispatch(Object):
         msg = self.gcode.get_str('MSG', params, '')
         self.gcode.respond("%s %s" %(prefix, msg))
 
-class Console(Object):
-    my_command = []
-    def __init__(self, hal, node):
-        Object.__init__(self, hal, node)
-
 # gcode child commander, to use in conjunction with toolheads
 class Gcode(Object):
-    # TODO for G2 ArcMove
-    #self.mm_per_arc_segment = config.getfloat('resolution', 1, above=0.0)
     my_command = [
             'G1', 'G2', 'G4', 'G20', 'G28', 'G90', 'G91', 'G92', 
             'M18', 'M82', 'M83', 'M104', 'M105', 'M109', 'M112', 'M114', 'M115', 'M118', 'M119', 'M204', 'M220', 'M221', 'M400', 
             'GCODE_SET_OFFSET', 'GCODE_SAVE_STATE', 'GCODE_RESTORE_STATE'
     ]
+    #self.metaconf["resolution"] = {"t":"float", "default":1., "above":0.}
     def __init__(self, hal, node):
         Object.__init__(self, hal, node)
         # G-Code coordinate manipulation
@@ -506,7 +523,7 @@ class Gcode(Object):
         self.base_position[3] = self.last_position[3]
     # process command's params
     def process_command(self, params):
-        logging.warning("TODO process Gcode command params:")
+        logging.warning("TOOLHEAD '%s': TODO process Gcode command params:", self.name)
         logging.warning("       %s", params)
         return params
     # ???
@@ -514,7 +531,7 @@ class Gcode(Object):
         return False, "gcodein=%d" % (self.bytes_read,)
     def set_move_transform(self, transform, force=False):
         if self.move_transform is not None and not force:
-            raise self.printer.config_error("G-Code move transform already specified")
+            raise error("G-Code move transform already specified")
         old_transform = self.move_transform
         if old_transform is None:
             old_transform = self.toolhead
@@ -617,12 +634,10 @@ class Gcode(Object):
             if 'F' in params:
                 gcode_speed = float(params['F'])
                 if gcode_speed <= 0.:
-                    raise self.error("Invalid speed in '%s'" % (
-                        params['#original'],))
+                    raise error("Invalid speed in '%s'" % (params['#original'],))
                 self.speed = gcode_speed * self.speed_factor
         except ValueError as e:
-            raise self.error("Unable to parse move '%s'" % (
-                params['#original'],))
+            raise error("Unable to parse move '%s'" % (params['#original'],))
         self.move_with_transform(self.last_position, self.speed)
     # function planArc() originates from marlin plan_arc() at https://github.com/MarlinFirmware/Marlin
     # Copyright (C) 2011 Camiel Gubbels / Erik van der Zalm
@@ -889,7 +904,7 @@ class Gcode(Object):
         e_value = (last_e_pos - self.base_position[3]) / self.extrude_factor
         self.base_position[3] = last_e_pos - e_value * new_extrude_factor
         self.extrude_factor = new_extrude_factor
-    cmd_M400_help = "Wair for current moves to finish"
+    cmd_M400_help = "Wait for current moves to finish"
     def cmd_M400(self, params):
         self.toolhead.wait_moves()
     cmd_GCODE_SET_OFFSET_help = "Set a virtual offset to g-code positions"
@@ -930,7 +945,7 @@ class Gcode(Object):
         state_name = self.get_str('NAME', params, 'default')
         state = self.saved_states.get(state_name)
         if state is None:
-            raise self.error("Unknown g-code state: %s" % (state_name,))
+            raise error("Unknown g-code state: %s" % (state_name,))
         # Restore state
         self.absolute_coord = state['absolute_coord']
         self.absolute_extrude = state['absolute_extrude']

@@ -61,6 +61,7 @@ class Main:
         Composer(config, self.hw)
         # load printer objects
         self.hw.load_tree_objects()
+        return False
     # register local event handlers and commands
     def register(self):
         self.hw.get_commander().register_command("SAVE_CONFIG", self.cmd_SAVE_CONFIG, desc=self.cmd_SAVE_CONFIG_help)
@@ -69,6 +70,14 @@ class Main:
         # identify mcu and complete controller init
         try:
             self.send_event("klippy:mcu_identify")
+            # if command line options requested the printer console,
+            # a lock is placed in order to give the console
+            # a chance to investigate the mcu before the printer connects.
+            # Console user must issue the "continue" command to resume
+            # normal operations.
+            start_args = self.get_start_args()
+            if 'printerconsole' in start_args:
+                start_args['printerconsole_lock'].acquire()
             # exec connect handlers
             for cb in self.event_handlers.get("klippy:connect", []):
                 if self.state_message is not msg("startup"):
@@ -151,6 +160,8 @@ class Main:
                 logging.exception("Exception during shutdown handler")
     def invoke_async_shutdown(self, message):
         self.reactor.register_async_callback((lambda e: self.invoke_shutdown(message)))
+    #
+    # events management
     def register_event_handler(self, event, callback):
         self.event_handlers.setdefault(event, []).append(callback)
     def send_event(self, event, *params):
@@ -159,6 +170,7 @@ class Main:
         if self.run_result is None:
             self.run_result = result
         self.reactor.end()
+    #
     # commands
     def _disallow_include_conflicts(self, regular_data, cfgname, gcode):
         config = self._build_config_wrapper(regular_data, cfgname)

@@ -736,8 +736,8 @@ class MCU:
         self._clocksync = clocksync
         #
         self._reactor = self.hal.get_reactor()
-        self.hal.get_printer().register_event_handler("klippy:connect", self._event_handle_connect)
         self.hal.get_printer().register_event_handler("klippy:mcu_identify", self._event_handle_mcu_identify)
+        self.hal.get_printer().register_event_handler("klippy:connect", self._event_handle_connect)
         self.hal.get_printer().register_event_handler("klippy:shutdown", self._event_handle_shutdown)
         self.hal.get_printer().register_event_handler("klippy:disconnect", self._event_handle_disconnect)
         # Serial port
@@ -1135,6 +1135,7 @@ class Board(part.Object):
             if cname.startswith("RESERVE_PINS_"):
                 for pin in value.split(','):
                     self.pin_reserve(pin, cname[13:])
+
         # TODO
         # get uart
         # get available i2c
