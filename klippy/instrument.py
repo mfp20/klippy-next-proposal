@@ -206,7 +206,7 @@ class StepperEnableToolhead:
         print_time = self.toolhead.get_last_move_time()
         for el in self.enable_line:
             self.enable_line[el].motor_disable(print_time)
-        self.hal.get_printer().send_event("steppertracker:"+self.toolhead.name+":motor_off", print_time)
+        self.hal.get_printer().event_send("steppertracker:"+self.toolhead.name+":motor_off", print_time)
         self.toolhead.dwell(DISABLE_STALL_TIME)
         logging.debug('; Max time of %f', print_time)
     # switch on/off the given stepper(s)
@@ -281,7 +281,6 @@ class Object(composite.Object):
             self.stepper_linetracker.register_stepper(s.name, s.object.enable)
         self.hal.get_controller().stepper_linetracker.register_tracker(self.name, self.stepper_linetracker)
         #
-        self.reactor = self.hal.get_reactor()
         self.all_mcus = self.hal.get_controller().mcu_list()
         self.mcu = self.all_mcus[0]
         self.can_pause = True
@@ -301,7 +300,7 @@ class Object(composite.Object):
         self.print_time = 0.
         self.special_queuing_state = "Flushed"
         self.need_check_stall = -1.
-        self.flush_timer = self.reactor.register_timer(self._flush_handler)
+        self.flush_timer = self.hal.get_reactor().register_timer(self._flush_handler)
         self.move_queue.set_flush_time(self._buffer_time_high)
         self.last_print_start_time = 0.
         self.idle_flush_print_time = 0.
@@ -333,7 +332,7 @@ class Object(composite.Object):
         #self.printer.try_load_module(config, "tuning_tower")
         self.ready = True
     def register(self):
-        self.hal.get_printer().register_event_handler("klippy:shutdown", self._handle_shutdown)
+        self.hal.get_printer().event_register_handler("klippy:shutdown", self._event_handle_shutdown)
         self.gcode.register_command('SET_VELOCITY_LIMIT', self.cmd_SET_VELOCITY_LIMIT, True, desc=self.cmd_SET_VELOCITY_LIMIT_help) 
         self.gcode.register_command('POSITION_GET', self.cmd_POSITION_GET, True, desc=self.cmd_POSITION_GET_help)
         self.gcode.register_command('POSITION_FORCE', self.cmd_POSITION_FORCE, True, desc=self.cmd_POSITION_FORCE_help)
@@ -357,14 +356,14 @@ class Object(composite.Object):
             if self.print_time >= next_print_time:
                 break
     def _calc_print_time(self):
-        curtime = self.reactor.monotonic()
+        curtime = self.hal.get_reactor().monotonic()
         est_print_time = self.mcu.estimated_print_time(curtime)
         kin_time = max(est_print_time + MIN_KIN_TIME, self.last_kin_flush_time)
         kin_time += self.kin_flush_delay
         min_print_time = max(est_print_time + self.buffer_time_start, kin_time)
         if min_print_time > self.print_time:
             self.print_time = self.last_print_start_time = min_print_time
-            self.printer.send_event("toolhead:sync_print_time", curtime, est_print_time, self.print_time)
+            self.printer.event_send("toolhead:sync_print_time", curtime, est_print_time, self.print_time)
     def _process_moves(self, moves):
         # Resync print_time if necessary
         if self.special_queuing_state:
@@ -372,7 +371,7 @@ class Object(composite.Object):
                 # Transition from "Flushed"/"Priming" state to main state
                 self.special_queuing_state = ""
                 self.need_check_stall = -1.
-                self.reactor.update_timer(self.flush_timer, self.reactor.NOW)
+                self.hal.get_reactor().update_timer(self.flush_timer, self.hal.get_reactor().NOW)
             self._calc_print_time()
         # Queue moves into trapezoid motion queue (trapq)
         next_move_time = self.print_time
@@ -400,7 +399,7 @@ class Object(composite.Object):
         self.move_queue.flush()
         self.special_queuing_state = "Flushed"
         self.need_check_stall = -1.
-        self.reactor.update_timer(self.flush_timer, self.reactor.NEVER)
+        self.hal.get_reactor().update_timer(self.flush_timer, self.hal.get_reactor().NEVER)
         self.move_queue.set_flush_time(self._buffer_time_high)
         self.idle_flush_print_time = 0.
         flush_time = self.last_kin_move_time + self.kin_flush_delay
@@ -416,7 +415,7 @@ class Object(composite.Object):
             self._calc_print_time()
         return self.print_time
     def _check_stall(self):
-        eventtime = self.reactor.monotonic()
+        eventtime = self.hal.get_reactor().monotonic()
         if self.special_queuing_state:
             if self.idle_flush_print_time:
                 # Was in "Flushed" state and got there from idle input
@@ -427,7 +426,7 @@ class Object(composite.Object):
             # Transition from "Flushed"/"Priming" state to "Priming" state
             self.special_queuing_state = "Priming"
             self.need_check_stall = -1.
-            self.reactor.update_timer(self.flush_timer, eventtime + 0.100)
+            self.hal.get_reactor().update_timer(self.flush_timer, eventtime + 0.100)
         # Check if there are lots of queued moves and stall if so
         while 1:
             est_print_time = self.mcu.estimated_print_time(eventtime)
@@ -436,9 +435,9 @@ class Object(composite.Object):
             if stall_time <= 0.:
                 break
             if not self.can_pause:
-                self.need_check_stall = self.reactor.NEVER
+                self.need_check_stall = self.hal.get_reactor().NEVER
                 return
-            eventtime = self.reactor.pause(eventtime + min(1., stall_time))
+            eventtime = self.hal.get_reactor().pause(eventtime + min(1., stall_time))
         if not self.special_queuing_state:
             # In main state - defer stall checking until needed
             self.need_check_stall = (est_print_time + self._buffer_time_high
@@ -456,14 +455,14 @@ class Object(composite.Object):
                 self.idle_flush_print_time = self.print_time
         except:
             logging.exception("Exception in flush_handler")
-            self.printer.invoke_shutdown("Exception in flush_handler")
-        return self.reactor.NEVER
+            self.printer.call_shutdown("Exception in flush_handler")
+        return self.hal.get_reactor().NEVER
     # Movement commands
     def get_position(self):
         return list(self.commanded_pos)
     def set_position(self, newpos, homing_axes=()):
         self.flush_step_generation()
-        self.trapq_free_moves(self.trapq, self.reactor.NEVER)
+        self.trapq_free_moves(self.trapq, self.hal.get_reactor().NEVER)
         self.commanded_pos[:] = newpos
         self.kin.set_position(newpos, homing_axes)
     def move(self, newpos, speed):
@@ -484,12 +483,12 @@ class Object(composite.Object):
         self._check_stall()
     def wait_moves(self):
         self._flush_lookahead()
-        eventtime = self.reactor.monotonic()
+        eventtime = self.hal.get_reactor().monotonic()
         while (not self.special_queuing_state
                or self.print_time >= self.mcu.estimated_print_time(eventtime)):
             if not self.can_pause:
                 break
-            eventtime = self.reactor.pause(eventtime + 0.100)
+            eventtime = self.hal.get_reactor().pause(eventtime + 0.100)
     def set_extruder(self, extruder, extrude_pos):
         self.extruder = extruder
         self.commanded_pos[3] = extrude_pos
@@ -501,7 +500,7 @@ class Object(composite.Object):
         while self.print_time < next_print_time:
             if self.drip_completion.test():
                 raise DripModeEndSignal()
-            curtime = self.reactor.monotonic()
+            curtime = self.hal.get_reactor().monotonic()
             est_print_time = self.mcu.estimated_print_time(curtime)
             wait_time = self.print_time - est_print_time - flush_delay
             if wait_time > 0. and self.can_pause:
@@ -514,8 +513,8 @@ class Object(composite.Object):
         # Transition from "Flushed"/"Priming"/main state to "Drip" state
         self.move_queue.flush()
         self.special_queuing_state = "Drip"
-        self.need_check_stall = self.reactor.NEVER
-        self.reactor.update_timer(self.flush_timer, self.reactor.NEVER)
+        self.need_check_stall = self.hal.get_reactor().NEVER
+        self.hal.get_reactor().update_timer(self.flush_timer, self.hal.get_reactor().NEVER)
         self.move_queue.set_flush_time(self._buffer_time_high)
         self.idle_flush_print_time = 0.
         self.drip_completion = drip_completion
@@ -530,7 +529,7 @@ class Object(composite.Object):
             self.move_queue.flush()
         except DripModeEndSignal as e:
             self.move_queue.reset()
-            self.trapq_free_moves(self.trapq, self.reactor.NEVER)
+            self.trapq_free_moves(self.trapq, self.hal.get_reactor().NEVER)
         # Exit "Drip" state
         self.flush_step_generation()
     # Misc commands
@@ -563,7 +562,7 @@ class Object(composite.Object):
                      'position': homing.Coord(*self.commanded_pos),
                      'printing_time': print_time - last_print_start_time })
         return res
-    def _handle_shutdown(self):
+    def _event_handle_shutdown(self):
         self.can_pause = False
         self.move_queue.reset()
     def get_kinematics(self):

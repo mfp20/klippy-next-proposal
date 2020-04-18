@@ -26,7 +26,7 @@ class PrinterNeoPixel:
         green = config.getfloat('initial_GREEN', 0., minval=0., maxval=1.)
         blue = config.getfloat('initial_BLUE', 0., minval=0., maxval=1.)
         self.update_color_data(red, green, blue)
-        self.printer.register_event_handler("klippy:connect", self.send_data)
+        self.printer.event_register_handler("klippy:connect", self.send_data)
         # Register commands
         self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_mux_command("SET_LED", "LED", name,

@@ -20,8 +20,8 @@ for the parameters that control this check.
 class Verifier:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.printer.register_event_handler("klippy:connect", self.handle_connect)
-        self.printer.register_event_handler("klippy:shutdown", self.handle_shutdown)
+        self.printer.event_register_handler("klippy:connect", self._event_handle_connect)
+        self.printer.event_register_handler("klippy:shutdown", self._event_handle_shutdown)
         self.heater_name = config.get_name().split()[1]
         self.heater = None
         self.hysteresis = config.getfloat('hysteresis', 5., minval=0.)
@@ -35,8 +35,8 @@ class Verifier:
         self.last_target = self.goal_temp = self.error = 0.
         self.goal_systime = self.printer.get_reactor().NEVER
         self.check_timer = None
-    def handle_connect(self):
-        if self.printer.get_start_args().get('debugoutput') is not None:
+    def _event_handle_connect(self):
+        if self.printer.get_args().get('output_debug') is not None:
             # Disable verify_heater if outputting to a debug file
             return
         pheater = self.printer.lookup_object('heater')
@@ -44,10 +44,10 @@ class Verifier:
         logging.info("Starting heater checks for %s", self.heater_name)
         reactor = self.printer.get_reactor()
         self.check_timer = reactor.register_timer(self.check_event, reactor.NOW)
-    def handle_shutdown(self):
+    def _event_handle_shutdown(self):
         if self.check_timer is not None:
             reactor = self.printer.get_reactor()
-            reactor.update_timer(self.check_timer, reactor.NEVER)
+            self.printer.get_reactor().update_timer(self.check_timer, reactor.NEVER)
     def check_event(self, eventtime):
         temp, target = self.heater.get_temp(eventtime)
         if temp >= target - self.hysteresis or target <= 0.:
@@ -90,7 +90,7 @@ class Verifier:
     def heater_fault(self):
         msg = "Heater %s not heating at expected rate" % (self.heater_name,)
         logging.error(msg)
-        self.printer.invoke_shutdown(msg + HINT_THERMAL)
+        self.printer.call_shutdown(msg + HINT_THERMAL)
         return self.printer.get_reactor().NEVER
 
 #
@@ -164,7 +164,7 @@ class Manager(part.Object):
         self.ready = True
         #self.printer.try_load_module(config, "verify_heater %s" % (self.name,))
     def register(self):
-        self.hal.get_printer().register_event_handler("commander:request_restart", self._event_handler_off_all_actuators)
+        self.hal.get_printer().event_register_handler("commander:request_restart", self._event_handler_off_all_actuators)
         self.hal.get_commander().register_command("TEMPERATURE_HEATERS_SWITCH", self.cmd_TEMPERATURE_HEATERS_SWITCH, desc=self.cmd_TEMPERATURE_HEATERS_SWITCH_help)
         self.hal.get_commander().register_command("TEMPERATURE_COOLERS_SWITCH", self.cmd_TEMPERATURE_COOLERS_SWITCH, desc=self.cmd_TEMPERATURE_COOLERS_SWITCH_help)
         self.hal.get_commander().register_command("TEMPERATURE_SWITCH", self.cmd_TEMPERATURE_SWITCH, desc=self.cmd_TEMPERATURE_SWITCH_help)
@@ -210,6 +210,10 @@ class Manager(part.Object):
         return tc.get_temp(self.hal.get_reactor().monotonic(), sensor)
     def set_target_temp(tcname, temp):
         self.get_tc(tcname).set_temp(temp)
+    #
+    def cleanup(self):
+        pass
+    #
     # commands
     cmd_SET_TEMPERATURE_help = "Sets the temperature for the given controller"
     def cmd_SET_TEMPERATURE(self, params):

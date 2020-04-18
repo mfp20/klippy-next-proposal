@@ -191,7 +191,7 @@ class Object(composite.Object):
         self.gcode.respond_info("Activating extruder %s" % (self.name))
         self.toolhead.flush_step_generation()
         self.toolhead.set_extruder(self, self.stepper.get_commanded_position())
-        self.printer.send_event("extruder:activate_extruder")
+        self.printer.event_send("extruder:activate_extruder")
 
 ATTRS = ("filament_diameter", "min_extrude_temp")
 def load_node_object(hal, node):

@@ -13,9 +13,9 @@ class EndstopPhase:
         self.printer = config.get_printer()
         self.name = config.get_name().split()[1]
         # Register event handlers
-        self.printer.register_event_handler("klippy:connect",
+        self.printer.event_register_handler("klippy:connect",
                                             self.handle_connect)
-        self.printer.register_event_handler("homing:home_rails_end",
+        self.printer.event_register_handler("homing:home_rails_end",
                                             self.handle_home_rails_end)
         self.printer.try_load_module(config, "endstop_phase")
         self.printer.try_load_module(config, "force_move")
@@ -61,7 +61,7 @@ class EndstopPhase:
         if self.endstop_phase_accuracy >= self.phases // 2:
             raise config.error("Endstop for %s is not accurate enough for"
                                " stepper phase adjustment" % (self.name,))
-        if self.printer.get_start_args().get('debugoutput') is not None:
+        if self.printer.get_args().get('debugoutput') is not None:
             self.endstop_phase_accuracy = self.phases
         self.phase_history = [0] * self.phases
     def align_endstop(self, pos):
@@ -121,7 +121,7 @@ class EndstopPhases:
                                     desc=self.cmd_ENDSTOP_PHASE_CALIBRATE_help)
         self.tracking = {}
         # Register event handler
-        self.printer.register_event_handler(
+        self.printer.event_register_handler(
             "homing:home_rails_end", self.handle_home_rails_end)
     def lookup_rail(self, stepper, stepper_name):
         mod_name = "endstop_phase %s" % (stepper_name,)

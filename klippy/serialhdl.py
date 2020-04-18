@@ -12,8 +12,8 @@ class error(Exception):
 
 class SerialReader:
     BITS_PER_BYTE = 10.
-    def __init__(self, reactor, serialport, baud, rts = True):
-        self.reactor = reactor
+    def __init__(self, hal, serialport, baud, rts = True):
+        self.hal = hal
         self.serialport = serialport
         self.baud = baud
         # Serial port
@@ -46,7 +46,7 @@ class SerialReader:
                 params = {'#sent_time': response.sent_time,
                           '#receive_time': response.receive_time}
                 completion = self.pending_notifications.pop(response.notify_id)
-                self.reactor.async_complete(completion, params)
+                self.hal.get_reactor().async_complete(completion, params)
                 continue
             params = self.msgparser.parse(response.msg[0:count])
             params['#sent_time'] = response.sent_time
@@ -77,9 +77,9 @@ class SerialReader:
     def connect(self):
         # Initial connection
         logging.debug("- Starting serial connect to '%s' at '%s' baud.", self.serialport, self.baud)
-        start_time = self.reactor.monotonic()
+        start_time = self.hal.get_reactor().monotonic()
         while 1:
-            connect_time = self.reactor.monotonic()
+            connect_time = self.hal.get_reactor().monotonic()
             if connect_time > start_time + 150.:
                 raise error("Unable to connect")
             try:
@@ -92,15 +92,15 @@ class SerialReader:
                     self.ser = open(self.serialport, 'rb+')
             except (OSError, IOError, serial.SerialException) as e:
                 logging.warn("Unable to open port: %s", e)
-                self.reactor.pause(connect_time + 5.)
+                self.hal.get_reactor().pause(connect_time + 5.)
                 continue
             if self.baud:
-                stk500v2_leave(self.ser, self.reactor)
+                stk500v2_leave(self.ser, self.hal.get_reactor())
             self.serialqueue = self.ffi_lib.serialqueue_alloc(self.ser.fileno(), 0)
             self.background_thread = threading.Thread(target=self._bg_thread)
             self.background_thread.start()
             # Obtain and load the data dictionary from the firmware
-            completion = self.reactor.register_callback(self._get_identify_data)
+            completion = self.hal.get_reactor().register_callback(self._get_identify_data)
             identify_data = completion.wait(connect_time + 5.)
             if identify_data is not None:
                 break
@@ -118,15 +118,13 @@ class SerialReader:
                 self.serialqueue, baud_adjust)
         receive_window = msgparser.get_constant_int('RECEIVE_WINDOW', None)
         if receive_window is not None:
-            self.ffi_lib.serialqueue_set_receive_window(
-                self.serialqueue, receive_window)
+            self.ffi_lib.serialqueue_set_receive_window(self.serialqueue, receive_window)
     def connect_file(self, debugoutput, dictionary, pace=False):
         self.ser = debugoutput
         self.msgparser.process_identify(dictionary, decompress=False)
         self.serialqueue = self.ffi_lib.serialqueue_alloc(self.ser.fileno(), 1)
     def set_clock_est(self, freq, last_time, last_clock):
-        self.ffi_lib.serialqueue_set_clock_est(
-            self.serialqueue, freq, last_time, last_clock)
+        self.ffi_lib.serialqueue_set_clock_est(self.serialqueue, freq, last_time, last_clock)
     def disconnect(self):
         if self.serialqueue is not None:
             self.ffi_lib.serialqueue_exit(self.serialqueue)
@@ -143,8 +141,7 @@ class SerialReader:
     def stats(self, eventtime):
         if self.serialqueue is None:
             return ""
-        self.ffi_lib.serialqueue_get_stats(
-            self.serialqueue, self.stats_buf, len(self.stats_buf))
+        self.ffi_lib.serialqueue_get_stats(self.serialqueue, self.stats_buf, len(self.stats_buf))
         return self.ffi_main.string(self.stats_buf)
     def get_reactor(self):
         return self.reactor
@@ -161,15 +158,13 @@ class SerialReader:
                 self.handlers[name, oid] = callback
     # Command sending
     def raw_send(self, cmd, minclock, reqclock, cmd_queue):
-        self.ffi_lib.serialqueue_send(self.serialqueue, cmd_queue,
-                                      cmd, len(cmd), minclock, reqclock, 0)
+        self.ffi_lib.serialqueue_send(self.serialqueue, cmd_queue, cmd, len(cmd), minclock, reqclock, 0)
     def raw_send_wait_ack(self, cmd, minclock, reqclock, cmd_queue):
         self.last_notify_id += 1
         nid = self.last_notify_id
-        completion = self.reactor.completion()
+        completion = self.hal.get_reactor().completion()
         self.pending_notifications[nid] = completion
-        self.ffi_lib.serialqueue_send(self.serialqueue, cmd_queue,
-                                      cmd, len(cmd), minclock, reqclock, nid)
+        self.ffi_lib.serialqueue_send(self.serialqueue, cmd_queue, cmd, len(cmd), minclock, reqclock, nid)
         params = completion.wait()
         if params is None:
             raise error("Serial connection closed")
@@ -187,14 +182,11 @@ class SerialReader:
     # Dumping debug lists
     def dump_debug(self):
         out = []
-        out.append("Dumping serial stats: %s" % (
-            self.stats(self.reactor.monotonic()),))
+        out.append("Dumping serial stats: %s" % (self.stats(self.hal.get_reactor().monotonic()),))
         sdata = self.ffi_main.new('struct pull_queue_message[1024]')
         rdata = self.ffi_main.new('struct pull_queue_message[1024]')
-        scount = self.ffi_lib.serialqueue_extract_old(
-            self.serialqueue, 1, sdata, len(sdata))
-        rcount = self.ffi_lib.serialqueue_extract_old(
-            self.serialqueue, 0, rdata, len(rdata))
+        scount = self.ffi_lib.serialqueue_extract_old(self.serialqueue, 1, sdata, len(sdata))
+        rcount = self.ffi_lib.serialqueue_extract_old(self.serialqueue, 0, rdata, len(rdata))
         out.append("Dumping send queue %d messages" % (scount,))
         for i in range(scount):
             msg = sdata[i]
@@ -242,7 +234,7 @@ class SerialRetryCommand:
             if retries <= 0:
                 self.serial.register_response(None, self.name, self.oid)
                 raise error("Unable to obtain '%s' response" % (self.name,))
-            reactor = self.serial.reactor
+            reactor = self.serial.hal.get_reactor()
             reactor.pause(reactor.monotonic() + retry_delay)
             retries -= 1
             retry_delay *= 2.

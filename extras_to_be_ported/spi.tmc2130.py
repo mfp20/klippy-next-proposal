@@ -185,7 +185,7 @@ class MCU_TMC_SPI:
         reg = self.name_to_reg[reg_name]
         with self.mutex:
             self.spi.spi_send([reg, 0x00, 0x00, 0x00, 0x00])
-            if self.printer.get_start_args().get('debugoutput') is not None:
+            if self.printer.get_args().get('debugoutput') is not None:
                 return 0
             params = self.spi.spi_transfer([reg, 0x00, 0x00, 0x00, 0x00])
         pr = bytearray(params['response'])

@@ -213,7 +213,7 @@ class PrinterConfig:
     def read_config(self, filename):
         return self._build_config_wrapper(self._read_config_file(filename), filename)
     def read_main_config(self):
-        filename = self.printer.get_start_args()['config_file']
+        filename = self.printer.get_args()['config_file']
         data = self._read_config_file(filename)
         regular_data, autosave_data = self._find_autosave_data(data)
         regular_config = self._build_config_wrapper(regular_data, filename)

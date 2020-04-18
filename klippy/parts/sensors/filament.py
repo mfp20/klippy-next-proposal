@@ -11,7 +11,7 @@ class RunoutHelper:
     def __init__(self, config):
         self.name = config.get_name().split()[-1]
         self.printer = config.get_printer()
-        self.reactor = self.printer.get_reactor()
+        self.hal.get_reactor().= self.printer.get_reactor()
         self.gcode = self.printer.lookup_object('gcode')
         # Read config
         self.runout_pause = config.getboolean('pause_on_runout', True)
@@ -28,11 +28,11 @@ class RunoutHelper:
         self.pause_delay = config.getfloat('pause_delay', .5, above=.0)
         self.event_delay = config.getfloat('event_delay', 3., above=0.)
         # Internal state
-        self.min_event_systime = self.reactor.NEVER
+        self.min_event_systime = self.hal.get_reactor().NEVER
         self.filament_present = False
         self.sensor_enabled = True
         # Register commands and event handlers
-        self.printer.register_event_handler("klippy:ready", self._handle_ready)
+        self.printer.event_register_handler("klippy:ready", self._handle_ready)
         self.gcode.register_mux_command(
             "QUERY_FILAMENT_SENSOR", "SENSOR", self.name,
             self.cmd_QUERY_FILAMENT_SENSOR,
@@ -42,7 +42,7 @@ class RunoutHelper:
             self.cmd_SET_FILAMENT_SENSOR,
             desc=self.cmd_SET_FILAMENT_SENSOR_help)
     def _handle_ready(self):
-        self.min_event_systime = self.reactor.monotonic() + 2.
+        self.min_event_systime = self.hal.get_reactor().monotonic() + 2.
     def _runout_event_handler(self, eventtime):
         # Pausing from inside an event requires that the pause portion
         # of pause_resume execute immediately.
@@ -60,12 +60,12 @@ class RunoutHelper:
             self.gcode.run_script(prefix + template.render() + "\nM400")
         except Exception:
             logging.exception("Script running error")
-        self.min_event_systime = self.reactor.monotonic() + self.event_delay
+        self.min_event_systime = self.hal.get_reactor().monotonic() + self.event_delay
     def note_filament_present(self, is_filament_present):
         if is_filament_present == self.filament_present:
             return
         self.filament_present = is_filament_present
-        eventtime = self.reactor.monotonic()
+        eventtime = self.hal.get_reactor().monotonic()
         if eventtime < self.min_event_systime or not self.sensor_enabled:
             # do not process during the initialization time, duplicates,
             # during the event delay time, while an event is running, or
@@ -78,18 +78,18 @@ class RunoutHelper:
         if is_filament_present:
             if not is_printing and self.insert_gcode is not None:
                 # insert detected
-                self.min_event_systime = self.reactor.NEVER
+                self.min_event_systime = self.hal.get_reactor().NEVER
                 logging.info(
                     "Filament Sensor %s: insert event detected, Time %.2f" %
                     (self.name, eventtime))
-                self.reactor.register_callback(self._insert_event_handler)
+                self.hal.get_reactor().register_callback(self._insert_event_handler)
         elif is_printing and self.runout_gcode is not None:
             # runout detected
-            self.min_event_systime = self.reactor.NEVER
+            self.min_event_systime = self.hal.get_reactor().NEVER
             logging.info(
                 "Filament Sensor %s: runout event detected, Time %.2f" %
                 (self.name, eventtime))
-            self.reactor.register_callback(self._runout_event_handler)
+            self.hal.get_reactor().register_callback(self._runout_event_handler)
     def get_status(self, eventtime):
         return {"filament_detected": bool(self.filament_present)}
     cmd_QUERY_FILAMENT_SENSOR_help = "Query the status of the Filament Sensor"
@@ -126,7 +126,7 @@ ADC_SAMPLE_COUNT = 5
 class HallFilamentWidthSensor:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.reactor = self.printer.get_reactor()
+        self.hal.get_reactor().= self.printer.get_reactor()
         self.pin1 = config.get('adc1')
         self.pin2 = config.get('adc2')
         self.dia1=config.getfloat('Cal_dia1', 1.5)
@@ -150,7 +150,7 @@ class HallFilamentWidthSensor:
         self.lastFilamentWidthReading = 0
         # printer objects
         self.toolhead = self.ppins = self.mcu_adc = None
-        self.printer.register_event_handler("klippy:ready", self.handle_ready)
+        self.printer.event_register_handler("klippy:ready", self.handle_ready)
         # Start adc
         self.ppins = self.printer.lookup_object('pins')
         self.mcu_adc = self.ppins.setup_pin('adc', self.pin1)
@@ -160,7 +160,7 @@ class HallFilamentWidthSensor:
         self.mcu_adc2.setup_minmax(ADC_SAMPLE_TIME, ADC_SAMPLE_COUNT)
         self.mcu_adc2.setup_adc_callback(ADC_REPORT_TIME, self.adc2_callback)
         # extrude factor updating
-        self.extrude_factor_update_timer = self.reactor.register_timer(
+        self.extrude_factor_update_timer = self.hal.get_reactor().register_timer(
             self.extrude_factor_update_event)
         # Register commands
         self.gcode = self.printer.lookup_object('gcode')
@@ -180,8 +180,8 @@ class HallFilamentWidthSensor:
         self.toolhead = self.printer.lookup_object('toolhead')
 
         # Start extrude factor update timer
-        self.reactor.update_timer(self.extrude_factor_update_timer,
-                                  self.reactor.NOW)
+        self.hal.get_reactor().update_timer(self.extrude_factor_update_timer,
+                                  self.hal.get_reactor().NOW)
 
     def adc_callback(self, read_time, read_value):
         # read sensor value
@@ -263,8 +263,8 @@ class HallFilamentWidthSensor:
         else:
             self.is_active = True
             # Start extrude factor update timer
-            self.reactor.update_timer(self.extrude_factor_update_timer,
-                                      self.reactor.NOW)
+            self.hal.get_reactor().update_timer(self.extrude_factor_update_timer,
+                                      self.hal.get_reactor().NOW)
         self.gcode.respond(response)
 
     def cmd_M406(self, params):
@@ -274,8 +274,8 @@ class HallFilamentWidthSensor:
         else:
             self.is_active = False
             # Stop extrude factor update timer
-            self.reactor.update_timer(self.extrude_factor_update_timer,
-                                      self.reactor.NEVER)
+            self.hal.get_reactor().update_timer(self.extrude_factor_update_timer,
+                                      self.hal.get_reactor().NEVER)
             # Clear filament array
             self.filament_array = []
             # Set extrude multiplier to 100%
@@ -309,7 +309,7 @@ MEASUREMENT_INTERVAL_MM = 10
 class FilamentWidthSensor:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.reactor = self.printer.get_reactor()
+        self.hal.get_reactor().= self.printer.get_reactor()
         self.pin = config.get('pin')
         self.nominal_filament_dia = config.getfloat(
             'default_nominal_filament_diameter', above=1.0)
@@ -326,14 +326,14 @@ class FilamentWidthSensor:
         self.lastFilamentWidthReading = 0
         # printer objects
         self.toolhead = self.ppins = self.mcu_adc = None
-        self.printer.register_event_handler("klippy:ready", self.handle_ready)
+        self.printer.event_register_handler("klippy:ready", self.handle_ready)
         # Start adc
         self.ppins = self.printer.lookup_object('pins')
         self.mcu_adc = self.ppins.setup_pin('adc', self.pin)
         self.mcu_adc.setup_minmax(ADC_SAMPLE_TIME, ADC_SAMPLE_COUNT)
         self.mcu_adc.setup_adc_callback(ADC_REPORT_TIME, self.adc_callback)
         # extrude factor updating
-        self.extrude_factor_update_timer = self.reactor.register_timer(
+        self.extrude_factor_update_timer = self.hal.get_reactor().register_timer(
             self.extrude_factor_update_event)
         # Register commands
         self.gcode = self.printer.lookup_object('gcode')
@@ -347,7 +347,7 @@ class FilamentWidthSensor:
         self.toolhead = self.printer.lookup_object('toolhead')
 
         # Start extrude factor update timer
-        self.reactor.update_timer(self.extrude_factor_update_timer, self.reactor.NOW)
+        self.hal.get_reactor().update_timer(self.extrude_factor_update_timer, self.hal.get_reactor().NOW)
     def adc_callback(self, read_time, read_value):
         # read sensor value
         self.lastFilamentWidthReading = round(read_value * 5, 2)
@@ -409,7 +409,7 @@ class FilamentWidthSensor:
         else:
             self.is_active = True
             # Start extrude factor update timer
-            self.reactor.update_timer(self.extrude_factor_update_timer, self.reactor.NOW)
+            self.hal.get_reactor().update_timer(self.extrude_factor_update_timer, self.hal.get_reactor().NOW)
         self.gcode.respond(response)
 
     def cmd_M406(self, params):
@@ -419,7 +419,7 @@ class FilamentWidthSensor:
         else:
             self.is_active = False
             # Stop extrude factor update timer
-            self.reactor.update_timer(self.extrude_factor_update_timer, self.reactor.NEVER)
+            self.hal.get_reactor().update_timer(self.extrude_factor_update_timer, self.hal.get_reactor().NEVER)
             # Clear filament array
             self.filament_array = []
             # Set extrude multiplier to 100%

@@ -144,9 +144,9 @@ class TMC2660CurrentHelper:
         self.idle_current_percentage = config.getint(
             'idle_current_percent', default=100, minval=0, maxval=100)
         if self.idle_current_percentage < 100:
-            self.printer.register_event_handler("idle_timeout:printing",
+            self.printer.event_register_handler("idle_timeout:printing",
                                                 self.handle_printing)
-            self.printer.register_event_handler("idle_timeout:ready",
+            self.printer.event_register_handler("idle_timeout:ready",
                                                 self.handle_ready)
 
         gcode = self.printer.lookup_object("gcode")
@@ -215,7 +215,7 @@ class MCU_TMC2660_SPI:
     def get_register(self, reg_name):
         reg = self.name_to_reg["DRVCONF"]
         val = self.fields.set_field("RDSEL", ReadRegisters.index(reg_name))
-        if self.printer.get_start_args().get('debugoutput') is not None:
+        if self.printer.get_args().get('debugoutput') is not None:
             return 0
         msg = [((val >> 16) | reg) & 0xff, (val >> 8) & 0xff, val & 0xff]
         with self.mutex:

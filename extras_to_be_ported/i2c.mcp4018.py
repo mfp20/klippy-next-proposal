@@ -69,7 +69,7 @@ class mcp4018:
         self.scale = config.getfloat('scale', 1., above=0.)
         self.start_value = config.getfloat('wiper',
                                            minval=0., maxval=self.scale)
-        config.get_printer().register_event_handler("klippy:connect",
+        config.get_printer().event_register_handler("klippy:connect",
                                                     self.handle_connect)
     def handle_connect(self):
         self.set_dac(self.start_value)

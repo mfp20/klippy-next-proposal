@@ -4,52 +4,24 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, sys, collections, importlib, cPickle as pickle
+import logging, os, sys, collections, importlib, cPickle as pickle
 from StringIO import StringIO
 
 from messaging import msg
 from messaging import Kerr as error
-import tree, reactor, commander, controller, timing, temperature, instrument
+import tree, commander, controller, timing, temperature, instrument
 from parts import *
 
 class Manager:
-    def __init__(self, printermod, printerobj):
-        # setup printer tree and basic nodes
-        self.tree = tree.PrinterTree()
-        self.tree.printer.module = printermod
-        self.tree.printer.object = printerobj
-        self.mk_child("printer", "hal")
-        self.mk_child("printer", "reactor")
-        self.mk_child("printer", "commander")
-        self.mk_child("printer", "controller")
-        self.mk_child("controller", "timing")
-        self.mk_child("controller", "temperature")
-        # add basic modules
-        self.tree.printer.children["hal"].module = sys.modules[__name__]
-        for n in ["reactor", "commander", "controller", "timing", "temperature"]:
-            self.node(n).module = importlib.import_module(n)
-        # add minimum objects
-        self.tree.printer.children["hal"].object = self
-        self.node("reactor").object = reactor.Reactor(self, self.node("reactor"))
+    def __init__(self, printer_tree):
+        self.tree = printer_tree
         # known parts and composites
         self.pgroups = ["mcu", "virtual", "sensor", "stepper", "heater", "cooler", "nozzle"]
         self.cgroups = ["tool", "cart", "rail"]
-        # ready mcu count
+        # mcu count
         self.mcu_count = 0
-    def mk_child(self, parentname, childname):
-        self.node(parentname).child_set(tree.PrinterNode(childname))
-    def register(self):
-        self.get_commander().register_command('SHOW_NODE', self.cmd_SHOW_NODE, desc=self.cmd_SHOW_NODE_help)
-        self.get_commander().register_command('SHOW_NODE_DETAILED', self.cmd_SHOW_NODE_DETAILED, desc=self.cmd_SHOW_NODE_DETAILED_help)
-        self.get_commander().register_command('SHOW_BRANCH', self.cmd_SHOW_BRANCH, desc=self.cmd_SHOW_BRANCH_help)
-        self.get_commander().register_command('SHOW_BRANCH_DETAILED', self.cmd_SHOW_BRANCH_DETAILED, desc=self.cmd_SHOW_BRANCH_DETAILED_help)
-        self.get_commander().register_command('SHOW_TREE', self.cmd_SHOW_TREE, desc=self.cmd_SHOW_TREE_help)
-        self.get_commander().register_command('SHOW_TREE_DETAILED', self.cmd_SHOW_TREE_DETAILED, desc=self.cmd_SHOW_TREE_DETAILED_help)
-    def add_pgroup(self, pgroup):
-        self.pgroups.append(pgroup)
-    def add_cgroup(self, cgroup):
-        self.cgroups.append(cgroup)
-    # nodes
+        #
+        self.ready = True
     def node(self, name):
         if name == "printer":
             return self.tree.printer
@@ -66,16 +38,11 @@ class Manager:
         elif name == "temperature":
             return self.tree.printer.children["controller"].children["temperature"]
         else:
-            return self.tree.printer.child_get_first(name)
-    def node_del(self, name):
-        self.tree.printer.del_node(name)
-    def node_move(self, name, newparentname):
-        self.tree.printer.move_node(name, newparentname)
-    # attrs
-    def attr_set(self, nodename, attrname, value):
-        self.node(nodename).attr_set(attrname, value)
-    def attr(self, nodename, attrname):
-        return self.node(nodename).attrs[attrname]
+            return self.tree.printer.object.node(name)
+    def add_pgroup(self, pgroup):
+        self.pgroups.append(pgroup)
+    def add_cgroup(self, cgroup):
+        self.cgroups.append(cgroup)
     # objects
     def obj(self, name):
         return self.node(name).object
@@ -91,6 +58,17 @@ class Manager:
     def obj_restore(self, obj):
         in_s = StringIO(obj)
         return pickle.load(in_s)
+    #
+    def _try_autoload_printlets(self):
+        path = os.path.join(os.path.dirname(__file__), "printlets")
+        for file in os.listdir(path):
+            if file.endswith(".py") and not file.startswith("__init__"):
+                mod = importlib.import_module("printlets." + file.split(".")[0])
+                init_func = getattr(mod, "load_printlet", None)
+                #logging.debug("printlets.%s %s", file.split(".")[0], init_func)
+                if init_func is not None:
+                    return init_func(self)
+                return None
     def load_tree_objects(self):
         #logging.debug(self.show("printer", plus="module,deep"))
         logging.debug("- Loading printer objects.")
@@ -152,7 +130,7 @@ class Manager:
                 node.object.register()
         # load printer's sniplets, development code to be tested
         logging.debug("- Autoloading extra printlets.")
-        self.get_printer().try_autoload_printlets(self)
+        self._try_autoload_printlets()
         #logging.debug(self.show("printer", plus="attrs,details,deep"))
     # wrappers
     def get_printer(self):
@@ -214,39 +192,8 @@ class Manager:
             if parent.name == "printer":
                 return None
             return self.get_kinematic_child(parent)
-    # misc
-    def show(self, nodename, indent=0, plus = "attrs,children"):
-        return self.node(nodename).show(None, indent, plus)
-    def show_tree(self, indent=0):
-        return self.tree.show(indent)
-    def ready(self):
-        logging.debug(self.tree.printer.show(plus="attrs,details,deep")+self.tree.spare.show(plus="deep"))
-    cmd_SHOW_NODE_help = "Shows information about one printer tree node."
-    def cmd_SHOW_NODE(self, params):
-        # TODO
-        nodename = "???"
-        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,children")), log=False)
-    cmd_SHOW_NODE_DETAILED_help = "Shows information about one printer tree node. All details."
-    def cmd_SHOW_NODE_DETAILED(self, params):
-        # TODO
-        nodename = "???"
-        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,children,details")), log=False)
-    cmd_SHOW_BRANCH_help = "Shows information about one tree branch."
-    def cmd_SHOW_BRANCH(self, params):
-        # TODO
-        nodename = "???"
-        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,deep")), log=False)
-    cmd_SHOW_BRANCH_DETAILED_help = "Shows information about one tree branch. All details."
-    def cmd_SHOW_BRANCH_DETAILED(self, params):
-        # TODO
-        nodename = "???"
-        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,details,deep")), log=False)
-    cmd_SHOW_TREE_help = "Shows the printer tree."
-    def cmd_SHOW_TREE(self, params):
-        # TODO
-        self.get_commander().respond_info("\n".join(self.tree.show()), log=False)
-    cmd_SHOW_TREE_DETAILED_help = "Shows the printer tree. All details."
-    def cmd_SHOW_TREE_DETAILED(self, params):
-        # TODO
-        self.get_commander().respond_info("\n".join(self.tree.printer.show(plus="attrs,details,deep")+self.tree.spare.show(plus="deep")), log=False)
-
+    def cleanup(self): 
+        self.get_commander().cleanup()
+        self.get_controller().cleanup()
+        self.get_timing().cleanup()
+        self.get_temperature().cleanup()

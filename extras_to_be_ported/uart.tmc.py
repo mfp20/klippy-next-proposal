@@ -199,7 +199,7 @@ class MCU_TMC_uart:
         return self.fields
     def _do_get_register(self, reg_name):
         reg = self.name_to_reg[reg_name]
-        if self.printer.get_start_args().get('debugoutput') is not None:
+        if self.printer.get_args().get('debugoutput') is not None:
             return 0
         for retry in range(5):
             val = self.mcu_uart.reg_read(self.instance_id, self.addr, reg)
@@ -212,7 +212,7 @@ class MCU_TMC_uart:
             return self._do_get_register(reg_name)
     def set_register(self, reg_name, val, print_time=None):
         reg = self.name_to_reg[reg_name]
-        if self.printer.get_start_args().get('debugoutput') is not None:
+        if self.printer.get_args().get('debugoutput') is not None:
             return
         with self.mutex:
             for retry in range(5):

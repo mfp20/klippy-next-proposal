@@ -26,7 +26,7 @@ Commands = {
 class BLTouchEndstopWrapper:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.printer.register_event_handler("klippy:connect",
+        self.printer.event_register_handler("klippy:connect",
                                             self.handle_connect)
         self.position_endstop = config.getfloat('z_offset')
         self.stow_on_each_sample = config.getboolean('stow_on_each_sample',

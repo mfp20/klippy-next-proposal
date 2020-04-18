@@ -375,7 +375,7 @@ class Object(actuator.Object):
             raise self.gcode.error("No endstop for this manual stepper")
         # Notify start of homing/probing move
         endstops = self.rail.get_endstops()
-        self.printer.send_event("homing:homing_move_begin", [es for es, name in endstops])
+        self.printer.event_send("homing:homing_move_begin", [es for es, name in endstops])
         # Start endstop checking
         self.sync_print_time()
         endstops = self.rail.get_endstops()
@@ -392,7 +392,7 @@ class Object(actuator.Object):
                 error = "Failed to home %s: Timeout during homing" % (name,)
         # Signal homing/probing move complete
         try:
-            self.printer.send_event("homing:homing_move_end", [es for es, name in endstops])
+            self.printer.event_send("homing:homing_move_end", [es for es, name in endstops])
         except CommandError as e:
             if error is None:
                 error = str(e)

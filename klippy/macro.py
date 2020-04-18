@@ -103,7 +103,7 @@ class GCodeMacro:
                 raise config.error(
                     "G-Code macro rename of different types ('%s' vs '%s')"
                     % (self.alias, self.rename_existing))
-            printer.register_event_handler("klippy:connect",
+            printer.event_register_handler("klippy:connect",
                                            self.handle_connect)
         else:
             self.gcode.register_command(self.alias, self.cmd,

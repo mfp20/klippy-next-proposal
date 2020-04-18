@@ -132,7 +132,7 @@ class Object(sensor.Object):
         #
         self.ready = True
     def read(self):
-        self.value = self.probe.query_endstop(self.reactor.monotonic())
+        self.value = self.probe.query_endstop(self.hal.get_reactor().monotonic())
         return self.value
 
 ATTRS = ("type", "pin")

@@ -79,7 +79,7 @@ class DisplayGroup:
 class PrinterLCD:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.reactor = self.printer.get_reactor()
+        self.hal.get_reactor().= self.printer.get_reactor()
         # Load low-level lcd handler
         self.lcd_chip = config.getchoice('lcd_type', LCD_chips)(config)
         # Load menu and display_status
@@ -103,8 +103,8 @@ class PrinterLCD:
         # Screen updating
         self.glyph_helpers = { 'animated_bed': self.animate_bed,
                                'animated_fan': self.animate_fan }
-        self.printer.register_event_handler("klippy:ready", self.handle_ready)
-        self.screen_update_timer = self.reactor.register_timer(
+        self.printer.event_register_handler("klippy:ready", self.handle_ready)
+        self.screen_update_timer = self.hal.get_reactor().register_timer(
             self.screen_update_event)
     # Configurable display
     def load_config(self, config):
@@ -143,7 +143,7 @@ class PrinterLCD:
     def handle_ready(self):
         self.lcd_chip.init()
         # Start screen update timer
-        self.reactor.update_timer(self.screen_update_timer, self.reactor.NOW)
+        self.hal.get_reactor().update_timer(self.screen_update_timer, self.hal.get_reactor().NOW)
     # Screen updating
     def screen_update_event(self, eventtime):
         # update menu component

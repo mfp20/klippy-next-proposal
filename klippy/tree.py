@@ -18,7 +18,12 @@ class PrinterNode:
     def group(self):
         return self.name.split(" ")[0]
     def id(self):
-        return self.name.split(" ")[1]
+        parts = self.name.split(" ")
+        if len(parts) > 1:
+            return parts[1]
+        else:
+            logging.warning("'%s' doesn't have group.", self.name)
+            return parts[0]
     def parent(self, root, childname):
         if not root: root = self
         for cn in root.children.keys():
@@ -168,7 +173,7 @@ class PrinterNode:
     # move child to another parent
     def child_move(self, name, newparentname, root = None):
         if not root: root = self
-        child = root.del_node(name)
+        child = root.child_del(name, root)
         if child:
             newparent = root.child_get_first(newparentname)
             if newparent:
@@ -178,7 +183,7 @@ class PrinterNode:
     # delete child
     def child_del(self, name, root = None):
         if not root: root = self
-        parent = root.parent_get(name)
+        parent = root.parent(root, name)
         if parent:
             return parent.children.pop(name)
         return None
@@ -243,7 +248,24 @@ class PrinterNode:
             txt = txt + '\t' * (indent+1) + "- " + str(n).ljust(20, " ") + " " + str(nodedict[n].object).split(" ")[0][1:] + "\n"
         return txt
     def show_details_reactor(self, node = None, indent = 0):
-        return ""
+        if node == None: node = self
+        # timers
+        txt = "\t"*(indent+1) + "--------------------- (timers)\n"
+        for t in sorted(node.object._timers):
+            txt = txt + '\t' * (indent+1) + "- " + str(t).ljust(20, " ") + "\n"
+        # callbacks
+        txt = "\t"*(indent+1) + "------------------ (callbacks)\n"
+        for c in sorted(node.object._pipe_fds):
+            txt = txt + '\t' * (indent+1) + "- " + str(c).ljust(20, " ") + "\n"
+        # file descriptors
+        txt = "\t"*(indent+1) + "------------------------ (FDs)\n"
+        for n in sorted(node.object._fds):
+            txt = txt + '\t' * (indent+1) + "- " + str(n).ljust(5, " ") + ": " + str(node.object._fds[n]).split(" ")[2] + "\n"
+        # greenlets
+        #txt = "\t"*(indent+1) + "------------------ (greenlets)\n"
+        #for g in sorted(node.object._greenlets):
+        #    txt = txt + '\t' * (indent+1) + "- " + str(g.run).ljust(20, " ") + "\n"
+        return txt
     def show_details_commander(self, node = None, indent = 0):
         if node == None: node = self
         txt = "\t"*(indent+2) + "------------------- (commands)\n"

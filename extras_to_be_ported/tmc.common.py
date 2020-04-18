@@ -88,7 +88,7 @@ class TMCCommandHelper:
         self.fields = mcu_tmc.get_fields()
         self.read_registers = self.read_translate = None
         self.toff = None
-        self.printer.register_event_handler("klippy:connect",
+        self.printer.event_register_handler("klippy:connect",
                                             self._handle_connect)
         # Register commands
         self.gcode = self.printer.lookup_object("gcode")
@@ -213,9 +213,9 @@ class TMCVirtualPinHelper:
         else:
             self.en_pwm = self.fields.get_field("en_pwm_mode")
             self.pwmthrs = 0
-        self.printer.register_event_handler("homing:homing_move_begin",
+        self.printer.event_register_handler("homing:homing_move_begin",
                                             self.handle_homing_move_begin)
-        self.printer.register_event_handler("homing:homing_move_end",
+        self.printer.event_register_handler("homing:homing_move_end",
                                             self.handle_homing_move_end)
         self.mcu_endstop = ppins.setup_pin('endstop', self.diag_pin)
         return self.mcu_endstop

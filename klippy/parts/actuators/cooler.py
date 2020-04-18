@@ -145,7 +145,7 @@ class PrinterFan:
         self.last_fan_value = 0.
         self.last_fan_time = 0.
         self.printer = config.get_printer()
-        self.printer.register_event_handler("gcode:request_restart", self.handle_request_restart)
+        self.printer.event_register_handler("gcode:request_restart", self.handle_request_restart)
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
         self.kick_start_time = config.getfloat('kick_start_time', 0.1, minval=0.)
         self.off_below = config.getfloat('off_below', default=0., minval=0., maxval=1.)
@@ -207,7 +207,7 @@ PIN_MIN_TIME = 0.100
 class ControllerFan:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.printer.register_event_handler("klippy:ready", self.handle_ready)
+        self.printer.event_register_handler("klippy:ready", self.handle_ready)
         self.stepper_names = []
         self.stepper_enable = self.printer.try_load_module(config, 'stepper_enable')
         self.heaters = []
@@ -263,7 +263,7 @@ PIN_MIN_TIME = 0.100
 class PrinterHeaterFan:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.printer.register_event_handler("klippy:ready", self.handle_ready)
+        self.printer.event_register_handler("klippy:ready", self.handle_ready)
         self.heater_name = config.get("heater", "extruder")
         self.heater_temp = config.getfloat("heater_temp", 50.0)
         self.heaters = []

@@ -222,15 +222,15 @@ class Probe:
         # Register z_virtual_endstop pin
         self.printer.lookup_object('pins').register_chip('probe', self)
         # Register homing event handlers
-        self.printer.register_event_handler("homing:homing_move_begin",
+        self.printer.event_register_handler("homing:homing_move_begin",
                                             self._handle_homing_move_begin)
-        self.printer.register_event_handler("homing:homing_move_end",
+        self.printer.event_register_handler("homing:homing_move_end",
                                             self._handle_homing_move_end)
-        self.printer.register_event_handler("homing:home_rails_begin",
+        self.printer.event_register_handler("homing:home_rails_begin",
                                             self._handle_home_rails_begin)
-        self.printer.register_event_handler("homing:home_rails_end",
+        self.printer.event_register_handler("homing:home_rails_end",
                                             self._handle_home_rails_end)
-        self.printer.register_event_handler("gcode:command_error",
+        self.printer.event_register_handler("gcode:command_error",
                                             self._handle_command_error)
         # Register PROBE/QUERY_PROBE commands
         self.gcode = self.printer.lookup_object('gcode')
@@ -287,7 +287,7 @@ class Probe:
         pos = toolhead.get_position()
         pos[2] = self.z_position
         endstops = [(self.mcu_probe, "probe")]
-        verify = self.printer.get_start_args().get('debugoutput') is None
+        verify = self.printer.get_args().get('debugoutput') is None
         try:
             homing_state.homing_move(pos, endstops, speed,
                                      probe_pos=True, verify_movement=verify)
@@ -809,7 +809,7 @@ def load_config(config):
 class BedTilt:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.printer.register_event_handler("klippy:connect",
+        self.printer.event_register_handler("klippy:connect",
                                             self.handle_connect)
         self.x_adjust = config.getfloat('x_adjust', 0.)
         self.y_adjust = config.getfloat('y_adjust', 0.)
@@ -906,7 +906,7 @@ class ZAdjustHelper:
         self.name = config.get_name()
         self.z_count = z_count
         self.z_steppers = []
-        self.printer.register_event_handler("klippy:connect",
+        self.printer.event_register_handler("klippy:connect",
                                             self.handle_connect)
     def handle_connect(self):
         kin = self.printer.lookup_object('toolhead').get_kinematics()
@@ -1113,7 +1113,7 @@ class BedMesh:
     FADE_DISABLE = 0x7FFFFFFF
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.printer.register_event_handler("klippy:ready",
+        self.printer.event_register_handler("klippy:ready",
                                             self.handle_ready)
         self.last_position = [0., 0., 0., 0.]
         self.bmc = BedMeshCalibrate(config, self)
@@ -2043,7 +2043,7 @@ class PrinterSkew:
         self.yz_factor = 0.
         self.skew_profiles = {}
         self._load_storage(config)
-        self.printer.register_event_handler("klippy:ready",
+        self.printer.event_register_handler("klippy:ready",
                                             self._handle_ready)
         self.next_transform = None
         self.gcode.register_command(

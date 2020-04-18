@@ -15,7 +15,7 @@ RETRANSMIT_COUNT = 50
 
 class MCU_buttons:
     def __init__(self, printer, mcu):
-        self.reactor = printer.get_reactor()
+        self.hal.get_reactor().= printer.get_reactor()
         self.mcu = mcu
         self.mcu.register_config_callback(self.build_config)
         self.pin_list = []
@@ -72,7 +72,7 @@ class MCU_buttons:
         self.ack_count += new_count
         # Call self.handle_button() with this event in main thread
         for b in new_buttons:
-            self.reactor.register_async_callback(
+            self.hal.get_reactor().register_async_callback(
                 (lambda e, s=self, b=ord(b): s.handle_button(e, b)))
     def handle_button(self, eventtime, button):
         button ^= self.invert
@@ -94,7 +94,7 @@ ADC_SAMPLE_COUNT = 6
 
 class MCU_ADC_buttons:
     def __init__(self, printer, pin, pullup):
-        self.reactor = printer.get_reactor()
+        self.hal.get_reactor().= printer.get_reactor()
         self.buttons = []
         self.last_button = None
         self.last_pressed = None
@@ -147,7 +147,7 @@ class MCU_ADC_buttons:
 
     def call_button(self, button, state):
         minval, maxval, callback = self.buttons[button]
-        self.reactor.register_async_callback(
+        self.hal.get_reactor().register_async_callback(
             (lambda e, cb=callback, s=state: cb(e, s)))
 
 

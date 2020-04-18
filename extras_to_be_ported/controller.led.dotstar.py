@@ -31,7 +31,7 @@ class PrinterDotstar:
         green = int(green * 255. + .5)
         color_data = [0xff, blue, green, red] * self.chain_count
         self.color_data = [0, 0, 0, 0] + color_data + [0xff, 0xff, 0xff, 0xff]
-        self.printer.register_event_handler("klippy:connect", self.send_data)
+        self.printer.event_register_handler("klippy:connect", self.send_data)
         # Register commands
         self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_mux_command("SET_LED", "LED", name,

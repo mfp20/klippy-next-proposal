@@ -17,8 +17,8 @@ class ReactorTimer:
 
 class ReactorCompletion:
     class sentinel: pass
-    def __init__(self, reactor):
-        self.reactor = reactor
+    def __init__(self, hal):
+        self.hal = hal
         self.result = self.sentinel
         self.waiting = []
     def test(self):
@@ -26,28 +26,28 @@ class ReactorCompletion:
     def complete(self, result):
         self.result = result
         for wait in self.waiting:
-            self.reactor.update_timer(wait.timer, self.reactor.NOW)
+            self.hal.get_reactor().update_timer(wait.timer, self.hal.get_reactor().NOW)
     def wait(self, waketime=_NEVER, waketime_result=None):
         if self.result is self.sentinel:
             wait = greenlet.getcurrent()
             self.waiting.append(wait)
-            self.reactor.pause(waketime)
+            self.hal.get_reactor().pause(waketime)
             self.waiting.remove(wait)
             if self.result is self.sentinel:
                 return waketime_result
         return self.result
 
 class ReactorCallback:
-    def __init__(self, reactor, callback, waketime):
-        self.reactor = reactor
-        self.timer = reactor.register_timer(self.invoke, waketime)
+    def __init__(self, hal, callback, waketime):
+        self.hal = hal
+        self.timer = self.hal.get_reactor().register_timer(self.invoke, waketime)
         self.callback = callback
-        self.completion = ReactorCompletion(reactor)
+        self.completion = ReactorCompletion(self.hal)
     def invoke(self, eventtime):
-        self.reactor.unregister_timer(self.timer)
+        self.hal.get_reactor().unregister_timer(self.timer)
         res = self.callback(eventtime)
         self.completion.complete(res)
-        return self.reactor.NEVER
+        return self.hal.get_reactor().NEVER
 
 class ReactorFileHandler:
     def __init__(self, fd, callback):
@@ -62,8 +62,8 @@ class ReactorGreenlet(greenlet.greenlet):
         self.timer = None
 
 class ReactorMutex:
-    def __init__(self, reactor, is_locked):
-        self.reactor = reactor
+    def __init__(self, hal, is_locked):
+        self.hal = hal
         self.is_locked = is_locked
         self.next_pending = False
         self.queue = []
@@ -78,7 +78,7 @@ class ReactorMutex:
         g = greenlet.getcurrent()
         self.queue.append(g)
         while 1:
-            self.reactor.pause(self.reactor.NEVER)
+            self.hal.get_reactor().pause(self.hal.get_reactor().NEVER)
             if self.next_pending and self.queue[0] is g:
                 self.next_pending = False
                 self.queue.pop(0)
@@ -88,7 +88,7 @@ class ReactorMutex:
             self.is_locked = False
             return
         self.next_pending = True
-        self.reactor.update_timer(self.queue[0].timer, self.reactor.NOW)
+        self.hal.get_reactor().update_timer(self.queue[0].timer, self.hal.get_reactor().NOW)
 
 class Select(part.Object):
     NOW = _NOW
@@ -146,9 +146,9 @@ class Select(part.Object):
         return min(1., max(.001, self._next_timer - self.monotonic()))
     # Callbacks and Completions
     def completion(self):
-        return ReactorCompletion(self)
+        return ReactorCompletion(self.hal)
     def register_callback(self, callback, waketime=NOW):
-        rcb = ReactorCallback(self, callback, waketime)
+        rcb = ReactorCallback(self.hal, callback, waketime)
         return rcb.completion
     # Return a completion that completes when all completions in a list complete
     def completion_multi(completions):
@@ -159,7 +159,7 @@ class Select(part.Object):
     # Asynchronous (from another thread) callbacks and completions
     def register_async_callback(self, callback, waketime=NOW):
         self._async_queue.put_nowait(
-            (ReactorCallback, (self, callback, waketime)))
+            (ReactorCallback, (self.hal, callback, waketime)))
         try:
             os.write(self._pipe_fds[1], '.')
         except os.error:
@@ -228,7 +228,7 @@ class Select(part.Object):
         self._g_dispatch = g_old
     # Mutexes
     def mutex(self, is_locked=False):
-        return ReactorMutex(self, is_locked)
+        return ReactorMutex(self.hal, is_locked)
     # File descriptors
     def register_fd(self, fd, callback):
         file_handler = ReactorFileHandler(fd, callback)
@@ -259,6 +259,9 @@ class Select(part.Object):
         g_next.switch()
     def end(self):
         self._process = False
+    def cleanup(self):
+        if self._process:
+            self._process = False
 
 class Poll(Select):
     def __init__(self, hal, node):

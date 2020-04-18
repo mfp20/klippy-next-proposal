@@ -25,7 +25,7 @@ class StepperEnableRail:
     def off(self, print_time = None):
         for el in self.enable_line:
             self.enable_line[el].motor_disable(print_time)
-        self.hal.get_printer().send_event("steppertracker:"+self.rail.name+":motor_off", print_time)
+        self.hal.get_printer().event_send("steppertracker:"+self.rail.name+":motor_off", print_time)
     # switch on/off the given stepper
     def debug_switch(self, stepper=None, enable=1):
         if stepper in self.enable_line:

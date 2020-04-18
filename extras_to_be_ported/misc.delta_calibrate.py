@@ -84,7 +84,7 @@ def measurements_to_distances(measured_params, delta_params):
 class DeltaCalibrate:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.printer.register_event_handler("klippy:connect",
+        self.printer.event_register_handler("klippy:connect",
                                             self.handle_connect)
         # Calculate default probing points
         radius = config.getfloat('radius', above=0.)

@@ -8,14 +8,14 @@ import os, logging
 class VirtualSD:
     def __init__(self, config):
         printer = config.get_printer()
-        printer.register_event_handler("klippy:shutdown", self.handle_shutdown)
+        printer.event_register_handler("klippy:shutdown", self.handle_shutdown)
         # sdcard state
         sd = config.get('path')
         self.sdcard_dirname = os.path.normpath(os.path.expanduser(sd))
         self.current_file = None
         self.file_position = self.file_size = 0
         # Work timer
-        self.reactor = printer.get_reactor()
+        self.hal.get_reactor().= printer.get_reactor()
         self.must_pause_work = self.cmd_from_sd = False
         self.work_timer = None
         # Register commands
@@ -65,7 +65,7 @@ class VirtualSD:
         if self.work_timer is not None:
             self.must_pause_work = True
             while self.work_timer is not None and not self.cmd_from_sd:
-                self.reactor.pause(self.reactor.monotonic() + .001)
+                self.hal.get_reactor().pause(self.hal.get_reactor().monotonic() + .001)
     # G-Code commands
     def cmd_error(self, params):
         raise self.gcode.error("SD write not supported")
@@ -118,8 +118,8 @@ class VirtualSD:
         if self.work_timer is not None:
             raise self.gcode.error("SD busy")
         self.must_pause_work = False
-        self.work_timer = self.reactor.register_timer(
-            self.work_handler, self.reactor.NOW)
+        self.work_timer = self.hal.get_reactor().register_timer(
+            self.work_handler, self.hal.get_reactor().NOW)
     def cmd_M25(self, params):
         # Pause SD print
         self.do_pause()
@@ -139,14 +139,14 @@ class VirtualSD:
     # Background work timer
     def work_handler(self, eventtime):
         logging.info("Starting SD card print (position %d)", self.file_position)
-        self.reactor.unregister_timer(self.work_timer)
+        self.hal.get_reactor().unregister_timer(self.work_timer)
         try:
             self.current_file.seek(self.file_position)
         except:
             logging.exception("virtual_sdcard seek")
             self.gcode.respond_error("Unable to seek file")
             self.work_timer = None
-            return self.reactor.NEVER
+            return self.hal.get_reactor().NEVER
         gcode_mutex = self.gcode.get_mutex()
         partial_input = ""
         lines = []
@@ -170,11 +170,11 @@ class VirtualSD:
                 lines[0] = partial_input + lines[0]
                 partial_input = lines.pop()
                 lines.reverse()
-                self.reactor.pause(self.reactor.NOW)
+                self.hal.get_reactor().pause(self.hal.get_reactor().NOW)
                 continue
             # Pause if any other request is pending in the gcode class
             if gcode_mutex.test():
-                self.reactor.pause(self.reactor.monotonic() + 0.100)
+                self.hal.get_reactor().pause(self.hal.get_reactor().monotonic() + 0.100)
                 continue
             # Dispatch command
             self.cmd_from_sd = True
@@ -190,7 +190,7 @@ class VirtualSD:
         logging.info("Exiting SD card print (position %d)", self.file_position)
         self.work_timer = None
         self.cmd_from_sd = False
-        return self.reactor.NEVER
+        return self.hal.get_reactor().NEVER
 
 def load_config(config):
     return VirtualSD(config)

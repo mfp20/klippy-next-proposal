@@ -25,7 +25,7 @@ class BME280:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name().split()[-1]
-        self.reactor = self.printer.get_reactor()
+        self.hal.get_reactor().= self.printer.get_reactor()
         self.i2c = bus.MCU_I2C_from_config(config, default_addr=BME280_CHIP_ADDR, default_speed=100000)
         self.os_temp = config.getint('bme280_oversample_temp', 2)
         self.os_hum = config.getint('bme280_oversample_hum', 2)
@@ -35,13 +35,13 @@ class BME280:
             (1.25 + (2.3 * self.os_temp) + ((2.3 * self.os_pres) +
              .575) + ((2.3 * self.os_hum) + .575)) / 1000
         self.dig = None
-        self.sample_timer = self.reactor.register_timer(self._sample_bme280)
+        self.sample_timer = self.hal.get_reactor().register_timer(self._sample_bme280)
         self.printer.add_object("bme280 " + self.name, self)
-        self.printer.register_event_handler("klippy:ready", self.handle_ready)
+        self.printer.event_register_handler("klippy:ready", self.handle_ready)
 
     def handle_ready(self):
         self._init_bme280()
-        self.reactor.update_timer(self.sample_timer, self.reactor.NOW)
+        self.hal.get_reactor().update_timer(self.sample_timer, self.hal.get_reactor().NOW)
 
     def setup_minmax(self, min_temp, max_temp):
         pass
@@ -75,7 +75,7 @@ class BME280:
         # Make sure non-volatile memory has been copied to registers
         status = self.read_register('STATUS', 1)[0]
         while status & STATUS_IM_UPDATE:
-            self.reactor.pause(self.reactor.monotonic() + .01)
+            self.hal.get_reactor().pause(self.hal.get_reactor().monotonic() + .01)
             status = self.read_register('STATUS', 1)[0]
 
         c1 = self.read_register('CAL_1', 26)
@@ -114,15 +114,15 @@ class BME280:
             # wait until results are ready
             status = self.read_register('STATUS', 1)[0]
             while status & STATUS_MEASURING:
-                self.reactor.pause(
-                    self.reactor.monotonic() + self.max_sample_time)
+                self.hal.get_reactor().pause(
+                    self.hal.get_reactor().monotonic() + self.max_sample_time)
                 status = self.read_register('STATUS', 1)[0]
 
             data = self.read_register('PRESSURE_MSB', 8)
         except Exception:
             logging.exception("BME280: Error reading data")
             self.temp = self.pressure = self.humidity = .0
-            return self.reactor.NEVER
+            return self.hal.get_reactor().NEVER
 
         pressure_raw = (data[0] << 12) | (data[1] << 4) | (data[2] >> 4)
         temp_raw = (data[3] << 12) | (data[4] << 4) | (data[5] >> 4)
@@ -131,7 +131,7 @@ class BME280:
         self.temp = self._compensate_temp(temp_raw)
         self.pressure = self._compensate_pressure(pressure_raw) / 100.
         self.humidity = self._compensate_humidity(humid_raw)
-        measured_time = self.reactor.monotonic()
+        measured_time = self.hal.get_reactor().monotonic()
         self._callback(measured_time, self.temp)
         return measured_time + REPORT_TIME
 

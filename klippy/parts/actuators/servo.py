@@ -62,7 +62,7 @@ class Object(actuator.Object):
             if initial_pulse_width is not None:
                 self.initial_pwm_value = self._get_pwm_from_pulse_width(
                     initial_pulse_width)
-        self.printer.register_event_handler("klippy:ready", self.handle_ready)
+        self.printer.event_register_handler("klippy:ready", self.handle_ready)
     def handle_ready(self):
         if self.initial_pwm_value is not None:
             toolhead = self.printer.lookup_object('toolhead')

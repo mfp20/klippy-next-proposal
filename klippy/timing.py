@@ -12,11 +12,10 @@ DECAY = 1. / 30.
 TRANSMIT_EXTRA = .001
 
 class Primary(part.Object):
-    def __init__(self, hal, node, reactor):
+    def __init__(self, hal, node):
         part.Object.__init__(self, hal, node)
-        self.reactor = reactor
         self.serial = None
-        self.get_clock_timer = reactor.register_timer(self._get_clock_event)
+        self.get_clock_timer = self.hal.get_reactor().register_timer(self._get_clock_event)
         self.get_clock_cmd = self.cmd_queue = None
         self.queries_pending = 0
         self.mcu_freq = 1.
@@ -45,11 +44,11 @@ class Primary(part.Object):
         for i in range(8):
             params = serial.send_with_response('get_clock', 'clock')
             self._serial_handle_clock(params)
-            self.reactor.pause(self.reactor.monotonic() + 0.050)
+            self.hal.get_reactor().pause(self.hal.get_reactor().monotonic() + 0.050)
         self.get_clock_cmd = serial.get_msgparser().create_command('get_clock')
         self.cmd_queue = serial.alloc_command_queue()
         serial.register_response(self._serial_handle_clock, 'clock')
-        self.reactor.update_timer(self.get_clock_timer, self.reactor.NOW)
+        self.hal.get_reactor().update_timer(self.get_clock_timer, self.hal.get_reactor().NOW)
     def connect_file(self, serial, pace=False):
         self.serial = serial
         self.mcu_freq = serial.msgparser.get_constant_float('CLOCK_FREQ')
@@ -57,7 +56,7 @@ class Primary(part.Object):
         freq = 1000000000000.
         if pace:
             freq = self.mcu_freq
-        serial.set_clock_est(freq, self.reactor.monotonic(), 0)
+        serial.set_clock_est(freq, self.hal.get_reactor().monotonic(), 0)
     # MCU clock querying (_serial_handle_clock is invoked from background thread)
     def _get_clock_event(self, eventtime):
         self.serial.raw_send(self.get_clock_cmd, 0, 0, self.cmd_queue)
@@ -153,19 +152,22 @@ class Primary(part.Object):
         return "freq=%d" % (freq,)
     def calibrate_clock(self, print_time, eventtime):
         return (0., self.mcu_freq)
+    #
+    def cleanup(self):
+        pass
 
 # Clock syncing code for secondary MCUs (whose clocks are sync'ed to a
 # primary MCU)
 class Secondary(Primary):
     def __init__(self, hal, reactor, main_sync):
-        Primary.__init__(self, hal, None, reactor)
+        Primary.__init__(self, hal, None)
         self.main_sync = main_sync
         self.clock_adj = (0., 1.)
         self.last_sync_time = 0.
     def connect(self, serial):
         Primary.connect(self, serial)
         self.clock_adj = (0., self.mcu_freq)
-        curtime = self.reactor.monotonic()
+        curtime = self.hal.get_reactor().monotonic()
         main_print_time = self.main_sync.estimated_print_time(curtime)
         local_print_time = self.estimated_print_time(curtime)
         self.clock_adj = (main_print_time - local_print_time, self.mcu_freq)
@@ -213,5 +215,5 @@ class Secondary(Primary):
         return self.clock_adj
 
 def load_node_object(hal, node):
-    node.object = Primary(hal, node, hal.get_reactor())
+    node.object = Primary(hal, node)
     return node.object

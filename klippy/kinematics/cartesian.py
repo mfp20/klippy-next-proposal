@@ -63,7 +63,7 @@ class Object(composite.Object):
             self.dual_carriage_rails = [self.rails[self.dual_carriage_axis], dc_rail]
         self.ready = True
     def register(self):
-        self.hal.get_printer().register_event_handler("steppertracker:"+self.id()+":motor_off", self._motor_off)
+        self.hal.get_printer().event_register_handler("steppertracker:"+self.id()+":motor_off", self._motor_off)
         if hasattr(self, "_dual-cart"):
             self.hal.get_gcode(self.id()).register_command('SET_DUAL_CARRIAGE', self.cmd_SET_DUAL_CARRIAGE, desc=self.cmd_SET_DUAL_CARRIAGE_help)
     def get_steppers(self):

@@ -33,8 +33,7 @@ class Object(part.Object):
         self.metaconf["default_prefix"] = {"t": "str", "default": "self._default_type"}
         #
         self.printer = self.hal.get_printer()
-        self.reactor = self.hal.get_reactor()
-        self.mutex = self.reactor.mutex()
+        self.mutex = self.hal.get_reactor().mutex()
         # input handling
         self.input_log = collections.deque([], 50)
         # command handling
@@ -153,6 +152,10 @@ class Object(part.Object):
     def run_script(self, script):
         with self.mutex:
             self._process_commands(script.split('\n'), need_ack=False)
+    #
+    def cleanup(self):
+        pass
+    #
     # base commands
     cmd_UNKNOWN_ready_only = False
     cmd_UNKNOWN_help = "Echo an unknown command"
@@ -180,10 +183,10 @@ class Dispatch(Object):
         self.fd = self.printer.input_fd
         # input handling
         self.is_processing_data = False
-        self.is_fileinput = not not self.printer.get_start_args().get("debuginput")
+        self.is_fileinput = not not self.printer.get_args().get("input_debug")
         self.fd_handle = None
         if not self.is_fileinput:
-            self.fd_handle = self.reactor.register_fd(self.fd, self._process_data)
+            self.fd_handle = self.hal.get_reactor().register_fd(self.fd, self._process_data)
         self.partial_input = ""
         self.pending_commands = []
         self.bytes_read = 0
@@ -192,17 +195,21 @@ class Dispatch(Object):
         self.commander = {}
         self.tool = 0
         # spawn a thread to run printer's interactive console
-        self.start_args = self.hal.get_printer().get_start_args()
-        if 'printerconsole' in self.start_args:
-            self.console = console.DispatchShell(self.hal, self.node(), self.start_args['printerconsole_lock'])
-            self._console_th = threading.Thread(name="printerconsole", target=self._console_run)
+        self.start_args = self.hal.get_printer().get_args()
+        if 'console' in self.start_args:
+            self.console = console.DispatchShell(self.hal, self.node(), self.start_args['console'])
+            self._console_th = threading.Thread(name="console", target=self._console_run)
             self._console_th.start()
             logging.debug("- Klippy command console started.")
         self.ready = True
+    # command console thread runner
+    def _console_run(self):
+        self.console.cmdloop()
+    #
     def register(self):
-        self.printer.register_event_handler("klippy:ready", self._event_handle_ready)
-        self.printer.register_event_handler("klippy:shutdown", self._event_handle_shutdown)
-        self.printer.register_event_handler("klippy:disconnect", self._event_handle_disconnect)
+        self.printer.event_register_handler("klippy:ready", self._event_handle_ready)
+        self.printer.event_register_handler("klippy:shutdown", self._event_handle_shutdown)
+        self.printer.event_register_handler("klippy:disconnect", self._event_handle_disconnect)
         Object.register(self)
         for cmd in self.printer_command:
             func = getattr(self, 'cmd_' + cmd)
@@ -212,7 +219,15 @@ class Dispatch(Object):
             for a in getattr(self, 'cmd_' + cmd + '_aliases', []):
                 self.register_command(a, func, wnr)
         #self.register_command("TOOLHEAD_ENABLE", self.cmd_TOOLHEAD_ENABLE, desc = self.cmd_TOOLHEAD_ENABLE_help)
+    #
     # event handlers
+    def _event_handle_ready(self):
+        self.is_printer_ready = True
+        #
+        if self.is_fileinput and self.fd_handle is None:
+            self.fd_handle = self.hal.get_reactor().register_fd(self.fd, self._process_data)
+        # respond
+        self._respond_state("Ready")
     def _dump_debug(self):
         out = []
         out.append("- Dumping commander input %d blocks" % (len(self.input_log),))
@@ -221,37 +236,17 @@ class Dispatch(Object):
         for c in self.commander:
             out.append(self.commander[c]._dump_debug())
         logging.info("\n".join(out))
-    def _console_run(self):
-        self.console.cmdloop()
-        self.hal.get_printer().request_exit('exit')
-    def _event_handle_ready(self):
-        self.is_printer_ready = True
-        #
-        if self.is_fileinput and self.fd_handle is None:
-            self.fd_handle = self.reactor.register_fd(self.fd, self._process_data)
-        # change console prompt
-        if 'printerconsole' in self.start_args:
-            self.console.prompt = "(ready) "
-        # respond
-        self._respond_state("Ready")
+    def _event_handle_disconnect(self):
+        self._respond_state("Disconnect")
     def _event_handle_shutdown(self):
         if not self.is_printer_ready:
             return
         self.is_printer_ready = False
         self._dump_debug()
         if self.is_fileinput:
-            self.printer.request_exit('error_exit')
-        # change console prompt
-        if 'printerconsole' in self.start_args:
-            self.console.prompt = "(shutdown) "
+            self.printer.shutdown('error')
         # respond
         self._respond_state("Shutdown")
-    def _event_handle_disconnect(self):
-        # close printerconsole
-        if 'printerconsole' in self.start_args:
-            self.console.prompt = "(disconnect) "
-        #
-        self._respond_state("Disconnect")
     # (un)register a child commander
     def register_commander(self, name, commander):
         if commander == None:
@@ -267,10 +262,10 @@ class Dispatch(Object):
     def request_restart(self, result):
         if self.is_printer_ready:
             print_time = self.toolhead.get_last_move_time()
-            self.printer.send_event("commander:request_restart", print_time)
+            self.printer.event_send("commander:request_restart", print_time)
             self.toolhead.dwell(0.500)
             self.toolhead.wait_moves()
-        self.printer.request_exit(result)
+        self.printer.shutdown(result)
     # Parse input into commands
     def _process_commands(self, commands, need_ack=True):
         for line in commands:
@@ -312,13 +307,13 @@ class Dispatch(Object):
                 handler(params)
             except error as e:
                 self.respond_error(str(e))
-                self.printer.send_event("commander:command_error")
+                self.printer.event_send("commander:command_error")
                 if not need_ack:
                     raise
             except:
                 msg = 'Internal error on command:"%s"' % (cmd,)
                 logging.exception(msg)
-                self.printer.invoke_shutdown(msg)
+                self.printer.call_shutdown(msg)
                 self.respond_error(msg)
                 if not need_ack:
                     raise
@@ -341,7 +336,7 @@ class Dispatch(Object):
         # Special handling for debug file input EOF
         if not data and self.is_fileinput:
             if not self.is_processing_data:
-                self.reactor.unregister_fd(self.fd_handle)
+                self.hal.get_reactor().unregister_fd(self.fd_handle)
                 self.fd_handle = None
                 self.request_restart('exit')
             pending_commands.append("")
@@ -355,7 +350,7 @@ class Dispatch(Object):
             if self.is_processing_data:
                 if len(pending_commands) >= 20:
                     # Stop reading input
-                    self.reactor.unregister_fd(self.fd_handle)
+                    self.hal.get_reactor().unregister_fd(self.fd_handle)
                     self.fd_handle = None
                 return
         # Process commands
@@ -367,7 +362,7 @@ class Dispatch(Object):
             pending_commands = self.pending_commands
         self.is_processing_data = False
         if self.fd_handle is None:
-            self.fd_handle = self.reactor.register_fd(self.fd, self._process_data)
+            self.fd_handle = self.hal.get_reactor().register_fd(self.fd, self._process_data)
     # response handling
     def ack(self, msg=None):
         if not self.need_ack or self.is_fileinput:
@@ -399,13 +394,17 @@ class Dispatch(Object):
             self.respond_info("\n".join(lines), log=False)
         self.respond('!! %s' % (lines[0].strip(),))
         if self.is_fileinput:
-            self.printer.request_exit('error_exit')
+            self.printer.shutdown('error')
     def _respond_state(self, state):
         self.respond_info("Klipper state: %s" % (state,), log=False)
+    #
+    def cleanup(self):
+        if 'console' in self.start_args:
+            self.console.cleanup()
     # printer commands
     def cmd_default(self, params):
         if not self.is_printer_ready:
-            self.respond_error(self.printer.get_state_message())
+            self.respond_error(self.printer.get_status())
             return
         cmd = params.get('#command')
         if not cmd:
@@ -432,14 +431,14 @@ class Dispatch(Object):
     cmd_RESTART_FIRMWARE_ready_only = False
     cmd_RESTART_FIRMWARE_help = "Restart firmware, host, and reload config"
     def cmd_RESTART_FIRMWARE(self, params):
-        self.request_restart('firmware_restart')
+        self.request_restart('restart_mcu')
     cmd_SHOW_STATUS_ready_only = False
     cmd_SHOW_STATUS_help = "Report the printer status"
     def cmd_SHOW_STATUS(self, params):
         if self.is_printer_ready:
             self._respond_state("Ready")
             return
-        msg = self.printer.get_state_message()
+        msg = self.printer.get_status()
         msg = msg.rstrip() + "\nKlipper state: Not ready"
         self.respond_error(msg)
     cmd_HELP_ready_only = False
@@ -502,7 +501,7 @@ class Gcode(Object):
             for a in getattr(self, 'cmd_' + cmd + '_aliases', []):
                 self.register_command(a, func, wnr)
         # events
-        self.hal.get_printer().register_event_handler("extruder:activate_extruder", self._handle_activate_extruder)
+        self.hal.get_printer().event_register_handler("extruder:activate_extruder", self._handle_activate_extruder)
     # event handlers
     def _dump_debug(self):
         out = []
@@ -556,14 +555,14 @@ class Gcode(Object):
         # Helper to wait on heater.check_busy() and report M105 temperatures
         if self.is_fileinput:
             return
-        eventtime = self.reactor.monotonic()
+        eventtime = self.hal.get_reactor().monotonic()
         while self.is_printer_ready and heater.check_busy(eventtime):
             print_time = self.toolhead.get_last_move_time()
             self.respond(self.get_temp(eventtime))
-            eventtime = self.reactor.pause(eventtime + 1.)
+            eventtime = self.hal.get_reactor().pause(eventtime + 1.)
     # status management
     def _action_emergency_stop(self, msg="action_emergency_stop"):
-        self.printer.invoke_shutdown("Shutdown due to %s" % (msg,))
+        self.printer.call_shutdown("Shutdown due to %s" % (msg,))
         return ""
     def _action_respond_info(self, msg):
         self.respond_info(msg)
@@ -835,7 +834,7 @@ class Gcode(Object):
     cmd_M105_help = "Get extruder temperature"
     cmd_M105_ready_only = True
     def cmd_M105(self, params):
-        msg = self.get_temp(self.reactor.monotonic())
+        msg = self.get_temp(self.hal.get_reactor().monotonic())
         if self.need_ack:
             self.ack(msg)
         else:
@@ -847,7 +846,7 @@ class Gcode(Object):
     cmd_M112_help = "Full (Emergency) stop"
     cmd_M112_ready_only = True
     def cmd_M112(self, params):
-        self.printer.invoke_shutdown("Shutdown due to M112 command")
+        self.printer.call_shutdown("Shutdown due to M112 command")
     cmd_M114_help = "Get current position"
     cmd_M114_ready_only = True
     def cmd_M114(self, params):
@@ -856,7 +855,7 @@ class Gcode(Object):
     cmd_M115_help = "Get firmware version and capabilities"
     cmd_M115_ready_only = True
     def cmd_M115(self, params):
-        software_version = self.printer.get_start_args().get('software_version')
+        software_version = self.printer.get_args().get('software_version')
         kw = {"FIRMWARE_NAME": "Klipper", "FIRMWARE_VERSION": software_version}
         self.ack(" ".join(["%s:%s" % (k, v) for k, v in kw.items()]))
     cmd_M118_help = "Send a message to the host"

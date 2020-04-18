@@ -1022,7 +1022,7 @@ class MenuManager:
         self.buttons = self.printer.try_load_module(config, "buttons")
         # register itself for printer callbacks
         self.printer.add_object('menu', self)
-        self.printer.register_event_handler("klippy:ready", self.handle_ready)
+        self.printer.event_register_handler("klippy:ready", self.handle_ready)
         # register buttons & encoder
         if self.buttons:
             # digital buttons
@@ -1513,7 +1513,7 @@ class MenuManager:
                                         log=False)
             elif action == 'event' and len(args) > 0:
                 if len(str(args[0])) > 0:
-                    self.printer.send_event(
+                    self.printer.event_send(
                         "menu:action:" + str(args[0]), *args[1:])
                 else:
                     logging.error("Malformed event call: {} {}".format(
@@ -1651,4 +1651,4 @@ class MenuManager:
     def kill_callback(self, eventtime):
         if self.kill_pin:
             # Emergency Stop
-            self.printer.invoke_shutdown("Shutdown due to kill button!")
+            self.printer.call_shutdown("Shutdown due to kill button!")
