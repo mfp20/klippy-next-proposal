@@ -17,14 +17,13 @@ from messaging import msg
 from messaging import Kerr as error
 import configfile, tree, hw, reactor, homing, msgproto
 
-# klippy main app
+# printer.Main := {tree, hardware abstraction layer, reactor}
 class Main:
     def __init__(self, input_fd, bglogger, start_args, exit_codes):
         self.input_fd = input_fd
         self.bglogger = bglogger
         self.args = start_args
         self.ecodes = exit_codes
-        # printer := {tree, hardware abstraction layer, reactor}
         self.tree = None
         self.hal = None
         # attrs
@@ -152,12 +151,7 @@ class Main:
         return False
     # register local commands
     def register(self):
-        self.hal.get_commander().register_command('SHOW_NODE', self.cmd_SHOW_NODE, desc=self.cmd_SHOW_NODE_help)
-        self.hal.get_commander().register_command('SHOW_NODE_DETAILED', self.cmd_SHOW_NODE_DETAILED, desc=self.cmd_SHOW_NODE_DETAILED_help)
-        self.hal.get_commander().register_command('SHOW_BRANCH', self.cmd_SHOW_BRANCH, desc=self.cmd_SHOW_BRANCH_help)
-        self.hal.get_commander().register_command('SHOW_BRANCH_DETAILED', self.cmd_SHOW_BRANCH_DETAILED, desc=self.cmd_SHOW_BRANCH_DETAILED_help)
-        self.hal.get_commander().register_command('SHOW_TREE', self.cmd_SHOW_TREE, desc=self.cmd_SHOW_TREE_help)
-        self.hal.get_commander().register_command('SHOW_TREE_DETAILED', self.cmd_SHOW_TREE_DETAILED, desc=self.cmd_SHOW_TREE_DETAILED_help)
+        self.hal.get_commander().register_commands(self)
     # called from __main__ loop
     def run(self):
         systime = time.time()
@@ -222,10 +216,6 @@ class Main:
         elif reason == 'error':
             pass
         elif reason == 'restart':
-            # TODO: in order to avoid reconfiguring, reactor must be revisited
-            #       to allow for resetting without the need to re-register everything.
-            #self.reactor = reactor.Reactor(self.hal, self.hal.node("reactor")) 
-            #self.n.children["reactor"].object = self.reactor
             pass
         elif reason == 'restart_mcu':
             pass
@@ -245,6 +235,9 @@ class Main:
         elif reason == 'error':
             pass
         elif reason == 'restart':
+            # TODO: in order to avoid reconfiguring, reactor must be revisited
+            #       to allow for resetting it without the need to re-register everything.
+            #self.n.children["reactor"].object = reactor.Reactor(self.hal, self.hal.node("reactor")) 
             pass
         elif reason == 'reconf':
             self.tree = None
@@ -260,34 +253,15 @@ class Main:
         return reason
     #
     # commands
-    cmd_SHOW_NODE_help = "Shows information about one printer tree node."
-    def cmd_SHOW_NODE(self, params):
-        # TODO
-        nodename = "???"
-        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,children")), log=False)
-    cmd_SHOW_NODE_DETAILED_help = "Shows information about one printer tree node. All details."
-    def cmd_SHOW_NODE_DETAILED(self, params):
-        # TODO
-        nodename = "???"
-        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,children,details")), log=False)
-    cmd_SHOW_BRANCH_help = "Shows information about one tree branch."
-    def cmd_SHOW_BRANCH(self, params):
-        # TODO
-        nodename = "???"
-        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,deep")), log=False)
-    cmd_SHOW_BRANCH_DETAILED_help = "Shows information about one tree branch. All details."
-    def cmd_SHOW_BRANCH_DETAILED(self, params):
-        # TODO
-        nodename = "???"
-        self.get_commander().respond_info("\n".join(self.show(nodename, plus="attrs,details,deep")), log=False)
-    cmd_SHOW_TREE_help = "Shows the printer tree."
-    def cmd_SHOW_TREE(self, params):
-        # TODO
-        self.get_commander().respond_info("\n".join(self.tree.show()), log=False)
-    cmd_SHOW_TREE_DETAILED_help = "Shows the printer tree. All details."
-    def cmd_SHOW_TREE_DETAILED(self, params):
-        # TODO
-        self.get_commander().respond_info("\n".join(self.tree.printer.show(plus="attrs,details,deep")+self.tree.spare.show(plus="deep")), log=False)
+    def _cmd__SHOW_PRINTER(self, params):
+        "Shows the printer's tree. Full details."
+        self.hal.get_commander().respond_info(self.tree.printer.show(plus="attrs,details,deep")+self.tree.spare.show(plus="deep"), log=False)
+    def _cmd__SHOW_PRINTER_TREE(self, params):
+        "Shows the printer's topology."
+        self.hal.get_commander().respond_info(self.tree.show(), log=False)
+    def _cmd__SHOW_PRINTER_STATUS(self, params):
+        "Shows the printer's status."
+        self.hal.get_commander().respond_info(str(self.get_status()), log=False)
 
 # tree and parts composer
 class Composer:
@@ -418,5 +392,4 @@ class Composer:
         toolhead.child_set(gnode)
         # build toolhead rails and carts
         return knode.module.load_tree_node(self.hal, knode, parts)
-
 

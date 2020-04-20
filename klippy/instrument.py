@@ -333,10 +333,8 @@ class Object(composite.Object):
         self.ready = True
     def register(self):
         self.hal.get_printer().event_register_handler("klippy:shutdown", self._event_handle_shutdown)
-        self.gcode.register_command('SET_VELOCITY_LIMIT', self.cmd_SET_VELOCITY_LIMIT, True, desc=self.cmd_SET_VELOCITY_LIMIT_help) 
-        self.gcode.register_command('POSITION_GET', self.cmd_POSITION_GET, True, desc=self.cmd_POSITION_GET_help)
-        self.gcode.register_command('POSITION_FORCE', self.cmd_POSITION_FORCE, True, desc=self.cmd_POSITION_FORCE_help)
-        self.gcode.register_command('STEPPER_SWITCH', self.cmd_STEPPER_SWITCH, desc=self.cmd_STEPPER_SWITCH_help)
+        #
+        self.gcode.register_commands(self)
    # Print time tracking
     def _update_move_time(self, next_print_time):
         batch_time = MOVE_BATCH_TIME
@@ -599,8 +597,8 @@ class Object(composite.Object):
         scv2 = self._square_corner_velocity**2
         self.junction_deviation = scv2 * (math.sqrt(2.) - 1.) / self._max_accel
         self.max_accel_to_decel = min(self.requested_accel_to_decel, self._max_accel)
-    cmd_SET_VELOCITY_LIMIT_help = "Set default acceleration"
     def cmd_SET_VELOCITY_LIMIT(self, params):
+        'Set default acceleration.'
         print_time = self.get_last_move_time()
         gcode = self.node.get_gcode(self.node.id())
         max_velocity = gcode.get_float('VELOCITY', params, self.max_velocity, above=0.)
@@ -618,9 +616,8 @@ class Object(composite.Object):
                % (max_velocity, max_accel, self.requested_accel_to_decel, square_corner_velocity))
         self.printer.set_rollover_info("toolhead", "toolhead: %s" % (msg,))
         gcode.respond_info(msg, log=False)
-    cmd_POSITION_GET_help = "Get current position"
-    cmd_POSITION_GET_ready_only = True
     def cmd_POSITION_GET(self, params):
+        'Get current position.'
         if self.toolhead is None:
             self.cmd_default(params)
             return
@@ -643,9 +640,8 @@ class Object(composite.Object):
                           "gcode base: %s\n"
                           "gcode homing: %s"
                           % (mcu_pos, stepper_pos, kin_pos, toolhead_pos, gcode_pos, base_pos, homing_pos))
-    cmd_POSITION_FORCE_help = "Force a low-level kinematic position"
-    cmd_POSITION_FORCE_ready_only = True
     def cmd_POSITION_FORCE(self, params):
+        'Force a low-level kinematic position.'
         self.get_last_move_time()
         curpos = self.get_position()
         x = self.gcode.get_float('X', params, curpos[0])
@@ -654,8 +650,8 @@ class Object(composite.Object):
         logging.warning("POSITION_FORCE pos=%.3f,%.3f,%.3f", x, y, z)
         self.set_position([x, y, z, curpos[3]], homing_axes=(0, 1, 2))
         self.gcode.reset_last_position()
-    cmd_STEPPER_SWITCH_help = "Enable/disable individual stepper by name"
     def cmd_STEPPER_SWITCH(self, params):
+        'Enable/disable individual stepper by name.'
         stepper_name = self.gcode.get_str('STEPPER', params, None)
         stepper_enable = self.gcode.get_int('ENABLE', params, 1)
         self.stepper_linetracker.debug_switch(stepper_name, stepper_enable)

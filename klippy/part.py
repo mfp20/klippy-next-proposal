@@ -29,15 +29,20 @@ class Object():
         self.pin = {}
         #
         self.ready = False
-    def _show_methods(self):
-        logging.info("NODE '%s' OBJ '%s'", self.node().name, self)
-        for m in sorted([method_name for method_name in dir(self) if callable(getattr(self, method_name))]):
-            logging.info("\tMETHOD: %s", m)
-        for a in sorted(vars(self)):
-            logging.info("\tVAR: %s VALUE %s", a, getattr(self, a))
     def group(self):
         return self.name.split(" ")[0]
     def id(self):
         return self.name.split(" ")[1]
     def node(self):
         return self.hal.node(self.name)
+    def register(self):
+        self.hal.get_commander().register_commands(self, self.name)
+    #
+    # commands
+    def _cmd__SHOW_PART(self, params):
+        'Shows information about a printer part.'
+        self.hal.get_commander().respond_info(self.node().show(plus="attrs,children"), log=False)
+    def _cmd__SHOW_PART_FULL(self, params):
+        'Shows information about a printer part. Full details.'
+        self.hal.get_commander().respond_info(self.node().show(plus="attrs,children,details"), log=False)
+

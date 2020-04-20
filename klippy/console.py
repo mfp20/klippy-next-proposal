@@ -7,17 +7,19 @@
 import logging, os, sys, cmd, re, time
 from messaging import msg
 from messaging import Kerr as error
-import msgproto
+import util, msgproto, commander
 
 # commander's shell, base class
 class ObjectShell(cmd.Cmd):
     __hiden_methods = ('do_EOF',)
     intro = None
     prompt = None
-    def __init__(self, hal, node):
-        cmd.Cmd.__init__(self)
+    cmdroot = None
+    def __init__(self, hal, node, cmdroot):
         self.hal = hal
         self.node = node
+        self.cmdroot = cmdroot
+        cmd.Cmd.__init__(self)
     # disable repetition of last command on empty line
     def emptyline(self):
         pass
@@ -29,6 +31,13 @@ class ObjectShell(cmd.Cmd):
         sys.stdout.write("%s\n" % (msg,))
         sys.stdout.flush()
     # exit from console
+    def do_printer(self, arg):
+        if self.cmdroot:
+            self.cmdroot.call(arg)
+    def complete_printer(self, text, line, begidx, endidx):
+        return self.cmdroot.completion(text, line)
+    def help_printer(self):
+        self.output("Issue one of the commands available at the printer's tty device.")
     def do_exit(self, arg):
         return True
     def help_exit(self):
@@ -41,8 +50,8 @@ class DispatchShell(ObjectShell):
     intro = "\n * Klippy command console. Type 'help' or '?' to list currently available commands.\n"
     prompt = "Klippy > "
     can_exit = False
-    def __init__(self, hal, node, lock):
-        ObjectShell.__init__(self, hal, node)
+    def __init__(self, hal, node, cmdroot, lock):
+        ObjectShell.__init__(self, hal, node, cmdroot)
         self.lock = lock
         # lock klippy startup before connect
         # allow to use a pristine mcu for debugging
@@ -72,7 +81,6 @@ class DispatchShell(ObjectShell):
         """
         self.output('README')
         self.output(help_txt)
-    # shell commands
     def do_shell(self, arg):
         'Prepend ! or "shell" to issue an OS command. Only a small subset of shell commands are available.'
         available = ['pwd', 'ls', 'cd', 'cat']
@@ -97,7 +105,7 @@ class DispatchShell(ObjectShell):
         'MCU sub-console. To exit just type "exit" and you will be back to main Klippy console.'
         node = self.hal.node("mcu "+arg)
         if node != None:
-            sh = MCUShell(self.hal, node)
+            sh = MCUShell(self.hal, node, None)
             sh.prompt = "Klippy:mcu "+node.id()+" > "
             sh.cmdloop()
         else:
@@ -120,7 +128,7 @@ class DispatchShell(ObjectShell):
         'Toolhead sub-console. To exit just type "exit" and you will be back to main Klippy console.'
         node = self.hal.node("gcode "+arg)
         if node != None:
-            sh = GcodeShell(self.hal, node)
+            sh = GcodeShell(self.hal, node, node.object.cmdroot)
             sh.prompt = "Klippy:toolhead "+node.id()+" > "
             sh.cmdloop(intro=None)
         else:
@@ -143,8 +151,8 @@ class DispatchShell(ObjectShell):
             self.lock.release()
 
 class ReflectorShell(ObjectShell):
-    def __init__(self, hal, node):
-        ObjectShell.__init__(self, hal, node)
+    def __init__(self, hal, node, cmdroot):
+        ObjectShell.__init__(self, hal, node, cmdroot)
         self.name = "Reflector"
         self.intro = "\n * Reflector console. Type 'help' or '?' to list currently available commands.\n"
     # help README
@@ -158,8 +166,8 @@ class ReflectorShell(ObjectShell):
 # MCU sub-console
 class MCUShell(ObjectShell):
     re_eval = re.compile(r'\{(?P<eval>[^}]*)\}')
-    def __init__(self, hal, node):
-        ObjectShell.__init__(self, hal, node)
+    def __init__(self, hal, node, cmdroot):
+        ObjectShell.__init__(self, hal, node, cmdroot)
         self.name = node.id()
         self.pins = node.object.pins
         self.mcu = node.object.mcu
@@ -354,8 +362,8 @@ the following builtin variables may be used in expressions:
 
 # each toolhead has one of these
 class GcodeShell(ObjectShell):
-    def __init__(self, hal, node):
-        ObjectShell.__init__(self, hal, node)
+    def __init__(self, hal, node, cmdroot):
+        ObjectShell.__init__(self, hal, node, cmdroot)
         self.name = node.id()
         self.intro = "\n* Toolhead '%s' command console. Type 'help' or '?' to list currently available commands.\n" % self.name
 

@@ -86,3 +86,12 @@ def get_git_version(from_file=True):
     if from_file:
         return get_version_from_file(klippy_src)
     return "?"
+
+# show object methods and vars
+def show_methods(obj):
+    logging.info("OBJ '%s'", obj)
+    for m in sorted([method_name for method_name in dir(obj) if callable(getattr(obj, method_name))]):
+        logging.info("\tMETHOD: %s", m)
+    for a in sorted(vars(obj)):
+        logging.info("\tVAR: %s VALUE %s", a, getattr(obj, a))
+

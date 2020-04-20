@@ -165,9 +165,8 @@ class Manager(part.Object):
         #self.printer.try_load_module(config, "verify_heater %s" % (self.name,))
     def register(self):
         self.hal.get_printer().event_register_handler("commander:request_restart", self._event_handler_off_all_actuators)
-        self.hal.get_commander().register_command("TEMPERATURE_HEATERS_SWITCH", self.cmd_TEMPERATURE_HEATERS_SWITCH, desc=self.cmd_TEMPERATURE_HEATERS_SWITCH_help)
-        self.hal.get_commander().register_command("TEMPERATURE_COOLERS_SWITCH", self.cmd_TEMPERATURE_COOLERS_SWITCH, desc=self.cmd_TEMPERATURE_COOLERS_SWITCH_help)
-        self.hal.get_commander().register_command("TEMPERATURE_SWITCH", self.cmd_TEMPERATURE_SWITCH, desc=self.cmd_TEMPERATURE_SWITCH_help)
+        #
+        self.hal.get_commander().register_commands(self)
     # handlers
     def _command_handler_off_all_heaters(self, print_time=0.):
         for tcontrol in self.tcontroller.values():
@@ -215,22 +214,22 @@ class Manager(part.Object):
         pass
     #
     # commands
-    cmd_SET_TEMPERATURE_help = "Sets the temperature for the given controller"
-    def cmd_SET_TEMPERATURE(self, params):
+    def _cmd__SET_TEMPERATURE(self, params):
+        'Sets the temperature for the given controller.'
         # TODO
         name = self.gcode.get_float('NAME', params, 0.)
         temp = self.gcode.get_float('TARGET', params, 0.)
         self._set_target_temp(name, temp)
-    cmd_TEMPERATURE_HEATERS_SWITCH_help = "Turn on/off all heaters"
-    def cmd_TEMPERATURE_HEATERS_SWITCH(self, params):
+    def _cmd__TEMPERATURE_HEATERS_SWITCH(self, params):
+        ''
         # TODO
         self._off_all_heaters()
-    cmd_TEMPERATURE_COOLERS_SWITCH_help = "Turn on/off all coolers"
-    def cmd_TEMPERATURE_COOLERS_SWITCH(self, params):
+    def _cmd__TEMPERATURE_COOLERS_SWITCH(self, params):
+        'Turn on/off all coolers'
         # TODO
         self._off_all_coolers()
-    cmd_TEMPERATURE_SWITCH_help = "Turn on/off all temperature actuators (ie: heaters and coolers)"
-    def cmd_TEMPERATURE_SWITCH(self, params):
+    def _cmd__TEMPERATURE_SWITCH(self, params):
+        'Turn on/off all temperature actuators (ie: heaters and coolers)'
         # TODO
         self._event_handler_off_all_actuators()
     def get_status(self, eventtime):

@@ -1388,16 +1388,7 @@ class Object(composite.Object):
             self.hal.get_printer().event_register_handler("board:"+b+":ready", self._event_handle_ready)
         self.hal.get_printer().event_register_handler("commander:request_restart", self._event_handle_request_restart)
         #
-        self.hal.get_commander().register_command('SHOW_PINS_ALL', self.cmd_SHOW_PINS_ALL, desc=self.cmd_SHOW_PINS_ALL_help)
-        self.hal.get_commander().register_command('SHOW_PINS_ACTIVE', self.cmd_SHOW_PINS_ACTIVE, desc=self.cmd_SHOW_PINS_ACTIVE_help)
-        self.hal.get_commander().register_command("SHOW_ADC_VALUE", self.cmd_SHOW_ADC_VALUE, desc=self.cmd_SHOW_ADC_VALUE_help)
-        self.hal.get_commander().register_command("SHOW_ENDSTOPS", self.cmd_SHOW_ENDSTOPS, desc=self.cmd_SHOW_ENDSTOPS_help)
-        self.hal.get_commander().register_command('STEPPER_BUZZ', self.cmd_STEPPER_BUZZ, desc=self.cmd_STEPPER_BUZZ_help)
-        self.hal.get_commander().register_command('STEPPER_MOVE', self.cmd_STEPPER_MOVE, desc=self.cmd_STEPPER_MOVE_help)
-        self.hal.get_commander().register_command('STEPPER_MOVE_FORCE', self.cmd_STEPPER_MOVE_FORCE, desc=self.cmd_STEPPER_MOVE_FORCE_help)
-        self.hal.get_commander().register_command("STEPPER_SWITCH", self.cmd_STEPPER_SWITCH, desc = self.cmd_STEPPER_SWITCH_help)
-        self.hal.get_commander().register_command("STEPPER_SWITCH_GROUP", self.cmd_STEPPER_SWITCH_GROUP, desc = self.cmd_STEPPER_SWITCH_GROUP_help)
-        self.hal.get_commander().register_command("STEPPER_OFF", self.cmd_STEPPER_OFF, desc = self.cmd_STEPPER_OFF_help)
+        self.hal.get_commander().register_commands(self)
     # events handlers
     def _event_handle_ready(self):
         self.board_ready = self.board_ready + 1
@@ -1534,16 +1525,16 @@ class Object(composite.Object):
         pass
     #
     # commands
-    cmd_SHOW_PINS_ALL_help = "Shows all pins."
     def cmd_SHOW_PINS_ALL(self):
+        'Shows all pins.'
         # TODO
         self.hal.get_commander().respond_info(self.pin_dict(), log=False)
-    cmd_SHOW_PINS_ACTIVE_help = "Shows active pins."
     def cmd_SHOW_PINS_ACTIVE(self):
+        'Shows active pins.'
         # TODO
         self.hal.get_commander().respond_info(self.pin_active_dict(), log=False)
-    cmd_SHOW_ADC_VALUE_help = "Report the last value of an analog pin"
     def cmd_SHOW_ADC_VALUE(self, params):
+        'Report the last value of an analog pin.'
         # TODO
         gcode = self.printer.lookup_object('gcode')
         name = gcode.get_str('NAME', params, None)
@@ -1561,16 +1552,16 @@ class Object(composite.Object):
             r = pullup * v / (1.0 - v)
             msg += "\n resistance %.3f (with %.0f pullup)" % (r, pullup)
         gcode.respond_info(msg)
-    cmd_SHOW_ENDSTOPS_help = "Report on the status of each endstop"
     def cmd_SHOW_ENDSTOPS(self, params):
+        'Report on the status of each endstop.'
         # TODO
         msg = " "
         for rail in self.hal.children_deep("rail "):
             msg = msg + ["%s:%s\n" % (name, ["open", "TRIGGERED"][not not t]) for name, t in rail.get_endstops_status()]
         #
         self.hal.get_gcode().respond(msg)
-    cmd_STEPPER_BUZZ_help = "Oscillate a given stepper to help id it"
     def cmd_STEPPER_BUZZ(self, params):
+        'Oscillate a given stepper to help id it.'
         stepper = self._lookup_stepper(params)
         logging.info("Stepper buzz %s", stepper.get_name())
         was_enable = self.force_enable(stepper)
@@ -1584,8 +1575,8 @@ class Object(composite.Object):
             self.move_force(stepper, -dist, speed)
             toolhead.dwell(.450)
         self.restore_enable(stepper, was_enable)
-    cmd_STEPPER_MOVE_help = "Manually move a stepper (only at idle, see STEPPER_MOVE_FORCE)"
     def cmd_STEPPER_MOVE(self, params):
+        'Manually move a stepper (only at idle, see STEPPER_MOVE_FORCE).'
         if 'ENABLE' in params:
             self.do_enable(self.gcode.get_int('ENABLE', params))
         if 'SET_POSITION' in params:
@@ -1603,8 +1594,8 @@ class Object(composite.Object):
             self.do_move(movepos, speed, accel, sync)
         elif 'SYNC' in params and sync:
             self.sync_print_time()
-    cmd_STEPPER_MOVE_FORCE_help = "Manually move a stepper; invalidates kinematics"
     def cmd_STEPPER_MOVE_FORCE(self, params):
+        'Manually move a stepper; invalidates kinematics.'
         stepper = self._lookup_stepper(params)
         distance = self.gcode.get_float('DISTANCE', params)
         speed = self.gcode.get_float('VELOCITY', params, above=0.)
@@ -1612,18 +1603,18 @@ class Object(composite.Object):
         logging.warning("STEPPER_MOVE_FORCE %s distance=%.3f velocity=%.3f accel=%.3f", stepper.get_name(), distance, speed, accel)
         self.force_enable(stepper)
         self.move_force(stepper, distance, speed, accel)
-    cmd_STEPPER_SWITCH_help = "Enable/disable individual stepper by name"
     def cmd_STEPPER_SWITCH(self, params):
+        'Enable/disable individual stepper by name.'
         stepper_name = self.hal.get_commander().get_str('STEPPER', params, None)
         stepper_enable = self.hal.get_commander().get_int('ENABLE', params, 1)
         self.stepper_linetracker.debug_switch(stepper_name, stepper_enable)
-    cmd_STEPPER_SWITCH_GROUP_help = "Enable/disable one group of steppers (ex: rail steppers, toolhead steppers) by name"
     def cmd_STEPPER_SWITCH_GROUP(self, params):
+        'Enable/disable one group of steppers (ex: rail steppers, toolhead steppers) by name.'
         stepper_group = self.hal.get_commander().get_str('GROUP', params, None)
         stepper_enable = self.hal.get_commander().get_int('ENABLE', params, 1)
         self.stepper_linetracker.debug_switch_tracker(stepper_group, stepper_enable)
-    cmd_STEPPER_OFF_help = "Enable/disable all steppers."
     def cmd_STEPPER_OFF(self, params):
+        'Enable/disable all steppers.'
         self.stepper_linetracker.off()
 
 ATTRS = ("serialport", "baud", "pin_map", "restart_method")

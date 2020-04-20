@@ -18,10 +18,180 @@ import part, console
 class sentinel:
     pass
 
+class CommandApi:
+    def __init__(self):
+        self.root = {}
+    # graft/remove/replace one command in the cmd tree
+    def _graft(self, cmd, root):
+        for w in cmd.keys():
+            #print "_GRAFT: %s" % w
+            if w in root.keys():
+                # need further investigation
+                if "_obj_" in cmd[w]:
+                    # cmd[w] is a leaf, so we must check the existing entry for parameter/removal/shorty/replace
+                    if "_obj_" in root[w]:
+                        # root[w] is a leaf too, need further investigation
+                        if cmd[w]["_obj_"]:
+                            # _obj_ exist, so we need to check the name inside the _obj_
+                            if "name" in cmd[w]["_obj_"][0]:
+                                # new cmd have a parameter
+                                i = 0
+                                for obj in root[w]["_obj_"]:
+                                    if "name" in obj:
+                                        if obj["name"] == cmd[w]["_obj_"][0]["name"]:
+                                            # replace
+                                            #print "\tREPLACE %s" % obj
+                                            root[w]["_obj_"][i] = cmd[w]["_obj_"][0]
+                                            return root
+                                    i = i + 1
+                                # nothing to replace, so we can add
+                                #print "\tINNEST GRAFT %s" % cmd[w]["_obj_"][0]
+                                root[w]["_obj_"].append(cmd[w]["_obj_"][0])
+                            else:
+                                # replace
+                                #print "\tREPLACE WHOLE _obj_ %s" % root[w]
+                                root[w]["_obj_"] = cmd[w]["_obj_"]
+                        else:
+                            # _obj_ == None, it's a removal
+                            #print "\tREMOVAL %s" % root[w]
+                            root.pop(w)
+                    else:
+                        # shorty graft (ie: catch all when no further arg is given)
+                        #print "\tSHORTY GRAFT %s" % cmd[w]["_obj_"]
+                        root[w]["_obj_"] = cmd[w]["_obj_"]
+                else:
+                    # cmd[w] isn't a leaf node, so we must search for inner graft point
+                    #print "\tDEEP IN"
+                    root[w] = self._graft(cmd[w], root[w])
+            else:
+                # root doesn't have this cmd, so we can graft
+                #print "\tOUTEST GRAFT %s" % cmd[w]
+                root[w] = cmd[w]
+        return root
+    # prepare a command _obj_ and call grafting method
+    def add(self, name, handler, ident = None, ready=False, desc=None):
+        parts = [part for part in name.split("_") if part != ""]
+        cmd = {}
+        cmdstr = ""
+        root = cmd
+        for p in parts:
+            root[p.lower()] = {}
+            root = root[p.lower()]
+            cmdstr = cmdstr + " " + p.lower()
+        if handler:
+            if ident:
+                root["_obj_"] = [{"name":str(ident), "handler":handler, "ready":ready, "help":desc}]
+            else:
+                root["_obj_"] = [{"handler":handler, "ready":ready, "help":desc}]
+        else:
+            root["_obj_"] = None
+        self.root = self._graft(cmd, self.root)
+    # to be called from cmd.Cmd complete_ method
+    def completion(self, text, line):
+        parts = line.split(" ")
+        parts.pop(0)
+        #print "\n%s PARTS %s" % (len(parts), parts)
+        if len(parts[0]) > 0:
+            i = 0
+            root = self.root
+            #print "TEXT %s %s" % (text, parts)
+            for p in parts:
+                if i == len(parts)-1:
+                    opts = []
+                    for k in root.keys():
+                        if k == "_obj_":
+                            continue
+                        if k.startswith(p):
+                            opts.append(k)
+                    #print "\tOPTIONS: "+str(opts)
+                    return opts
+                else:
+                    root = root[p]
+                    i = i+1
+            return root.keys()
+        else:
+            #print "\nTEXT None"
+            #print "\tOPTIONS: "+str(self.root.keys())
+            return self.root.keys()
+    # find and invoke handlers
+    def call(self, arg):
+        #print "\nLINE: %s" % arg
+        parts = arg.split(" ")
+        #print "\t%s PARTS %s" % (len(parts), parts)
+        if len(parts[0]) > 0:
+            # search the leaf, then elaborate
+            leaf = self.root
+            i = 0
+            for p in parts:
+                if p in leaf.keys():
+                    # not a leaf, go inside
+                    leaf = leaf[p]
+                    i = i + 1
+                    continue
+            command = " ".join(parts[:i]).strip()
+            arg = " ".join(parts[i:]).strip()
+            #print "COMMAND ("+command+") ARG ("+arg+")"
+            if len(parts[i:]) == 0:
+                if "_obj_" in leaf:
+                    for o in leaf["_obj_"]:
+                        if "name" not in o:
+                            #print "HANDLER: %s" % o
+                            return o["handler"](None)
+                    print "Command not found: %s" % command
+                else:
+                    print "Command incomplete: %s" % command
+            else:
+                if "_obj_" in leaf:
+                    for o in leaf["_obj_"]:
+                        if "name" in o:
+                            if o["name"] == arg:
+                                #print "HANDLER: %s, ARG: %s" % (o,arg)
+                                return o["handler"](arg)
+                    print "Wrong command args '%s'" % arg
+                else:
+                    print "Command incomplete: %s" % command
+    # show the command's path
+    def show(self, root = None, indent = 1):
+        if root == None: root = self.root
+        for c in root:
+            if c == "_obj_":
+                print c+" "+str(root[c])
+                pass
+            else:
+                print str(" "*indent) + c
+                self.show(root[c], indent+1)
+
+# test functions, can be removed
+def testcmd(arg=None):
+    print "RECEIVED ARG: '%s'" % str(arg)
+def mktestcmd():
+    cmd = CommandApi()
+    cmd.add("JUSTIFIED_OPTION", testcmd, None, ready=False, desc="JUSTIFIED_OPTION")
+    #
+    cmd.add("JUST_A_TEST_OF_OPTION", testcmd, None, ready=False, desc="JUST_A_TEST_OF_OPTION")
+    #
+    cmd.add("JUST_TWO_TEST_FOR_OPTIONS", testcmd, None, ready=False, desc="JUST_TWO_TEST_FOR_OPTIONS")
+    # test manipulation
+    cmd.add("JUST_TWO_ATTEMPTS", testcmd, None, ready=False, desc="JUST_TWO_ATTEMPTS")
+    # replace
+    cmd.add("JUST_TWO_ATTEMPTS", testcmd, None, ready=False, desc="JUST_TWO_ATTEMPTS (REPLACE)")
+    # removal
+    cmd.add("JUST_TWO_ATTEMPTS", None, None, ready=False, desc="JUST TWO ATTEMPTS (REMOVAL)")
+    # re-added
+    cmd.add("JUST_TWO_ATTEMPTS", testcmd, None, ready=False, desc="JUST_TWO_ATTEMPTS")
+    # same, with arg
+    cmd.add("JUST_TWO_ATTEMPTS", testcmd, "12", ready=False, desc="JUST TWO ATTEMPTS 12 (ARG)")
+    # same, with arg, duplicate
+    cmd.add("JUST_TWO_ATTEMPTS", testcmd, "12", ready=False, desc="JUST TWO ATTEMPTS 12 (DUPLICATE)")
+    #
+    cmd.add("JUST_TWO_TRIES", testcmd, None, ready=False, desc="JUST TWO TRIES")
+    # shorty
+    cmd.add("JUST_TWO", testcmd, None, ready=False, desc="JUST_TWO (shorty)")
+    return cmd
+
 # commander, base class
 class Object(part.Object):
     respond_types = { 'echo': 'echo:', 'command': '//', 'error' : '!!'}
-    object_command = ["UNKNOWN", "IGNORE", "ECHO"]
     extended_r = re.compile(
         r'^\s*(?:N[0-9]+\s*)?'
         r'(?P<cmd>[a-zA-Z_][a-zA-Z0-9_]+)(?:\s+|$)'
@@ -41,14 +211,7 @@ class Object(part.Object):
         self.command_help = {}
         self.ready_only = {}
         self.command = {}
-    def register(self):
-        for cmd in self.object_command:
-            func = getattr(self, 'cmd_' + cmd)
-            wnr = getattr(self, 'cmd_' + cmd + '_ready_only', False)
-            desc = getattr(self, 'cmd_' + cmd + '_help', None)
-            self.register_command(cmd, func, wnr, desc)
-            for a in getattr(self, 'cmd_' + cmd + '_aliases', []):
-                self.register_command(a, func, wnr)
+        self.cmdroot = CommandApi()
     # command and params, parsing and manipulation
     def _is_traditional_gcode(self, cmd):
         # A "traditional" g-code command is a letter and followed by a number
@@ -92,54 +255,23 @@ class Object(part.Object):
         return self.get_str(name, params, default, parser=int, minval=minval, maxval=maxval)
     def get_float(self, name, params, default=sentinel, minval=None, maxval=None, above=None, below=None):
         return self.get_str(name, params, default, parser=float, minval=minval, maxval=maxval, above=above, below=below)
-    def _demux_func(self, params):
-        key, values = self.command[params['#command']]
-        if None in values:
-            key_param = self.get_str(key, params, None)
-        else:
-            key_param = self.get_str(key, params)
-        if key_param not in values:
-            raise error("The value '%s' is not valid for %s" % (key_param, key))
-        values[key_param](params)
     # (un)register command
-    def register_command(self, cmd, func, ready=False, desc=None):
-        # if func == None, removes and returns
-        if func is None:
-            old_cmd = self.command_handler.get(cmd)
-            if cmd in self.ready_only:
-                self.ready_only.pop(cmd)
-            if cmd in self.command_handler:
-                self.command_handler.pop(cmd)
-            return old_cmd
-        # check duplicate
-        if cmd in self.command_handler:
-            raise error("command %s already registered" % (cmd,))
-        # check extended params
-        if not self._is_traditional_gcode(cmd):
-            origfunc = func
-            func = lambda params: origfunc(self._get_extended_params(params))
-        # add command handler
-        self.command_handler[cmd] = func
-        # add ready flag
-        if ready:
-            self.ready_only[cmd] = True
-        # add help (if any)
-        if desc is not None:
-            self.command_help[cmd] = desc
-    # (un)register parametric command: a command having the same key with multiple values
-    # Example:  to turn off one stepper, the command must have the key "stepper"
-    #           and values can be 1 for every registered stepper
-    def register_command_mux(self, cmd, func, key, value, ready=False, desc=None):
-        prev = self.command.get(cmd)
-        if prev is None:
-            self.register_command(cmd, self._demux_func, ready, desc)
-            self.command[cmd] = prev = (key, {})
-        prev_key, prev_values = prev
-        if prev_key != key:
-            raise error("mux command %s %s %s may have only one key (%s)" % (cmd, key, value, prev_key))
-        if value in prev_values:
-            raise error("mux command %s %s %s already registered (%s)" % (cmd, key, value, prev_values))
-        prev_values[value] = func
+    def register_commands(self, obj, ident=None):
+        # TODO check extended params ???
+        #if not self._is_traditional_gcode(cmd):
+        #    origfunc = func
+        #    func = lambda params: origfunc(self._get_extended_params(params))
+        #
+        for m in sorted([method_name for method_name in dir(obj) if method_name.startswith("_cmd__") and not method_name.endswith("_aliases")]):
+            name = m.replace("_cmd__", "").lower().strip()
+            ro = False
+            if m.endswith("_ready_only"):
+                ro = True
+                name = name.replace("_ready_only", "")
+            self.cmdroot.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
+            for a in getattr(obj, m + '_aliases', []):
+                name = a.replace("_cmd__", " ").lower().strip()
+                self.cmdroot.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
     # scripts support
     def get_mutex(self):
         return self.mutex
@@ -157,24 +289,20 @@ class Object(part.Object):
         pass
     #
     # base commands
-    cmd_UNKNOWN_ready_only = False
-    cmd_UNKNOWN_help = "Echo an unknown command"
-    def cmd_UNKNOWN(self, params):
+    def _cmd__UNKNOWN(self, params):
+        'Echo an unknown command.'
         self.respond_info(params['#original'], log=False)
-    cmd_IGNORE_ready_only = False
-    cmd_IGNORE_help = "Just silently accepted"
-    def cmd_IGNORE(self, params):
+    def _cmd__IGNORE(self, params):
+        'Just silently accepted.'
         # Commands that are just silently accepted
         pass
-    cmd_ECHO_ready_only = False
-    cmd_ECHO_help = "Echo a command"
-    def cmd_ECHO(self, params):
+    def _cmd__ECHO(self, params):
+        'Echo a command.'
         self.respond_info(params['#original'], log=False)
 
 # commander, commands receiver and dispatcher
 class Dispatch(Object):
     RETRY_TIME = 0.100
-    printer_command = ['RESTART', 'RESTART_FIRMWARE', 'SHOW_STATUS', 'HELP', 'RESPOND']
     args_r = re.compile('([A-Z_]+|[A-Z*/])')
     m112_r = re.compile('^(?:[nN][0-9]+)?\s*[mM]112(?:\s|$)')
     def __init__(self, hal, node):
@@ -194,13 +322,6 @@ class Dispatch(Object):
         self.is_printer_ready = False
         self.commander = {}
         self.tool = 0
-        # spawn a thread to run printer's interactive console
-        self.start_args = self.hal.get_printer().get_args()
-        if 'console' in self.start_args:
-            self.console = console.DispatchShell(self.hal, self.node(), self.start_args['console'])
-            self._console_th = threading.Thread(name="console", target=self._console_run)
-            self._console_th.start()
-            logging.debug("- Klippy command console started.")
         self.ready = True
     # command console thread runner
     def _console_run(self):
@@ -210,15 +331,16 @@ class Dispatch(Object):
         self.printer.event_register_handler("klippy:ready", self._event_handle_ready)
         self.printer.event_register_handler("klippy:shutdown", self._event_handle_shutdown)
         self.printer.event_register_handler("klippy:disconnect", self._event_handle_disconnect)
-        Object.register(self)
-        for cmd in self.printer_command:
-            func = getattr(self, 'cmd_' + cmd)
-            wnr = getattr(self, 'cmd_' + cmd + '_ready_only', False)
-            desc = getattr(self, 'cmd_' + cmd + '_help', None)
-            self.register_command(cmd, func, wnr, desc)
-            for a in getattr(self, 'cmd_' + cmd + '_aliases', []):
-                self.register_command(a, func, wnr)
-        #self.register_command("TOOLHEAD_ENABLE", self.cmd_TOOLHEAD_ENABLE, desc = self.cmd_TOOLHEAD_ENABLE_help)
+        #
+        self.register_commands(self)
+        # spawn a thread to run printer's interactive console
+        self.start_args = self.hal.get_printer().get_args()
+        if 'console' in self.start_args:
+            self.console = console.DispatchShell(self.hal, self.node(), self.cmdroot, self.start_args['console'])
+            self.console.cmdroot.show()
+            self._console_th = threading.Thread(name="console", target=self._console_run)
+            self._console_th.start()
+            logging.debug("- Klippy command console started.")
     #
     # event handlers
     def _event_handle_ready(self):
@@ -385,10 +507,14 @@ class Dispatch(Object):
     def respond_info(self, msg, log=True):
         if log:
             logging.info(msg)
+        if 'console' in self.start_args:
+            print msg+"\n"
         lines = [l.strip() for l in msg.strip().split('\n')]
         self.respond("// " + "\n// ".join(lines))
     def respond_error(self, msg):
         logging.warning(msg)
+        if 'console' in self.start_args:
+            print msg+"\n"
         lines = msg.strip().split('\n')
         if len(lines) > 1:
             self.respond_info("\n".join(lines), log=False)
@@ -424,25 +550,22 @@ class Dispatch(Object):
             # Don't warn about requests to turn off fan when fan not present
             return
         self.respond_info('Unknown command:"%s"' % (cmd,))
-    cmd_RESTART_ready_only = False
-    cmd_RESTART_help = "Reload config file and restart host software"
     def cmd_RESTART(self, params):
+        'Reload config file and restart host software.'
         self.request_restart('restart')
-    cmd_RESTART_FIRMWARE_ready_only = False
-    cmd_RESTART_FIRMWARE_help = "Restart firmware, host, and reload config"
     def cmd_RESTART_FIRMWARE(self, params):
+        'Restart firmware, host, and reload config.'
         self.request_restart('restart_mcu')
-    cmd_SHOW_STATUS_ready_only = False
-    cmd_SHOW_STATUS_help = "Report the printer status"
     def cmd_SHOW_STATUS(self, params):
+        'Report the printer status.'
         if self.is_printer_ready:
             self._respond_state("Ready")
             return
         msg = self.printer.get_status()
         msg = msg.rstrip() + "\nKlipper state: Not ready"
         self.respond_error(msg)
-    cmd_HELP_ready_only = False
     def cmd_HELP(self, params):
+        'Help.'
         cmdhelp = []
         if not self.is_printer_ready:
             cmdhelp.append("Printer is not ready - not all commands available.")
@@ -451,8 +574,8 @@ class Dispatch(Object):
             if cmd in self.help:
                 cmdhelp.append("%-10s: %s" % (cmd, self.help[cmd]))
         self.respond_info("\n".join(cmdhelp), log=False)
-    cmd_RESPOND_help = "Send a message to the host"
     def cmd_RESPOND(self, params):
+        'Send a message to the host.'
         respond_type = self.gcode.get_str('TYPE', params, None)
         prefix = self.default_prefix
         if(respond_type != None):
@@ -464,14 +587,10 @@ class Dispatch(Object):
         prefix = self.gcode.get_str('PREFIX', params, prefix)
         msg = self.gcode.get_str('MSG', params, '')
         self.gcode.respond("%s %s" %(prefix, msg))
+    #self.register_command("TOOLHEAD_ENABLE", self.cmd_TOOLHEAD_ENABLE, desc = self.cmd_TOOLHEAD_ENABLE_help)
 
 # gcode child commander, to use in conjunction with toolheads
 class Gcode(Object):
-    my_command = [
-            'G1', 'G2', 'G4', 'G20', 'G28', 'G90', 'G91', 'G92', 
-            'M18', 'M82', 'M83', 'M104', 'M105', 'M109', 'M112', 'M114', 'M115', 'M118', 'M119', 'M204', 'M220', 'M221', 'M400', 
-            'GCODE_SET_OFFSET', 'GCODE_SAVE_STATE', 'GCODE_RESTORE_STATE'
-    ]
     #self.metaconf["resolution"] = {"t":"float", "default":1., "above":0.}
     def __init__(self, hal, node):
         Object.__init__(self, hal, node)
@@ -493,13 +612,8 @@ class Gcode(Object):
         self.axis2pos = {'X': 0, 'Y': 1, 'Z': 2, 'E': 3}
         self.ready = True
     def register(self):
-        for cmd in self.my_command:
-            func = getattr(self, 'cmd_' + cmd)
-            wnr = getattr(self, 'cmd_' + cmd + '_ready_only', True)
-            desc = getattr(self, 'cmd_' + cmd + '_help', None)
-            self.register_command(cmd, func, wnr, desc)
-            for a in getattr(self, 'cmd_' + cmd + '_aliases', []):
-                self.register_command(a, func, wnr)
+        #
+        self.register_commands(self)
         # events
         self.hal.get_printer().event_register_handler("extruder:activate_extruder", self._handle_activate_extruder)
     # event handlers
@@ -608,9 +722,9 @@ class Gcode(Object):
             'action_emergency_stop': self._action_emergency_stop,
         }
     # (G) codes
-    cmd_G1_help = "Linear move"
-    cmd_G1_aliases = ['G0'] # G0 Rapid move
-    def cmd_G1(self, params):
+    _cmd__G1_aliases = ['G0'] # G0 Rapid move
+    def _cmd__G1(self, params):
+        'Linear move'
         try:
             for axis in 'XYZ':
                 if axis in params:
@@ -712,9 +826,9 @@ class Gcode(Object):
             #
             coords.append([raw[X_AXIS],  raw[Y_AXIS], raw[Z_AXIS] ])
         return coords
-    cmd_G2_help = "Counterclockwise rotation move"
-    cmd_G2_aliases = ['G3'] # G3 "Clockwise rotaion move"
-    def cmd_G2(self, params):
+    _cmd__G2_aliases = ['G3'] # G3 "Clockwise rotaion move"
+    def _cmd__G2(self, params):
+        'Counterclockwise rotation move'
         # set vars
         currentPos =  self.get_status(None)['gcode_position']
         #
@@ -759,15 +873,15 @@ class Gcode(Object):
                     self.cmd_G1(g1_params)
             else:
                 self.respond_info("could not tranlate from '" + params['#original'] + "'")
-    cmd_G4_help = "Dwell"
-    def cmd_G4(self, params):
+    def _cmd__G4(self, params):
+        'Dwell'
         delay = self.get_float('P', params, 0., minval=0.) / 1000.
         self.toolhead.dwell(delay)
-    cmd_G20_help = "Set Units to Inches"
-    def cmd_G20(self, params):
+    def _cmd__G20(self, params):
+        ''
         self.respond_error('Machine does not support G20 (inches) command')    
-    cmd_G28_help = "Move to origin (home)"
-    def cmd_G28(self, params):
+    def _cmd__G28(self, params):
+        'Move to origin (home)'
         axes = []
         for axis in 'XYZ':
             if axis in params:
@@ -781,14 +895,14 @@ class Gcode(Object):
         for axis in homing_state.get_axes():
             self.base_position[axis] = self.homing_position[axis]
         self.reset_last_position()
-    cmd_G90_help = "Set to absolute positioning"
-    def cmd_G90(self, params):
+    def _cmd__G90(self, params):
+        'Set to absolute positioning'
         self.absolute_coord = True
-    cmd_G91_help = "Set to relative positioning"
-    def cmd_G91(self, params):
+    def _cmd__G91(self, params):
+        'Set to relative positioning'
         self.absolute_coord = False
-    cmd_G92_help = "Set position"
-    def cmd_G92(self, params):
+    def _cmd__G92(self, params):
+        ''
         offsets = { p: self.get_float(a, params)
                     for a, p in self.axis2pos.items() if a in params }
         for p, offset in offsets.items():
@@ -798,21 +912,20 @@ class Gcode(Object):
         if not offsets:
             self.base_position = list(self.last_position)
     # (M)iscellaneous commands
-    cmd_M18_help = "Disable all stepper motors"
-    cmd_M18_aliases = ['M84'] # M84 "Disable idle hold"
-    def cmd_M18(self, params):
+    _cmd__M18_aliases = ['M84'] # M84 "Disable idle hold"
+    def _cmd__M18(self, params):
+        'Disable all stepper motors'
         # Turn off motors
         # TODO params
         self.hal.get_controller().cmd_STEPPER_GROUP_SWITCH(params)
-    cmd_M82_help = "Set extruder to absolute mode"
-    def cmd_M82(self, params):
+    def _cmd__M82(self, params):
+        'Set extruder to absolute mode'
         self.absolute_extrude = True
-    cmd_M83_help = "Set extruder to relative mode"
-    def cmd_M83(self, params):
+    def _cmd__M83(self, params):
+        'Set extruder to relative mode'
         self.absolute_extrude = False
-    cmd_M104_help = "Set extrude temperature"
-    cmd_M104_ready_only = True
-    def cmd_M104(self, params, wait=False):
+    def _cmd__M104_ready_only(self, params, wait=False):
+        'Set extrude temperature'
         gcode = self.printer.lookup_object('base_gcode')
         temp = gcode.get_float('S', params, 0.)
         if 'T' in params:
@@ -831,36 +944,30 @@ class Gcode(Object):
         heater.set_temp(temp)
         if wait and temp:
             gcode.wait_for_temperature(heater)
-    cmd_M105_help = "Get extruder temperature"
-    cmd_M105_ready_only = True
-    def cmd_M105(self, params):
+    def _cmd__M105_ready_only(self, params):
+        'Get extruder temperature'
         msg = self.get_temp(self.hal.get_reactor().monotonic())
         if self.need_ack:
             self.ack(msg)
         else:
             self.respond(msg)
-    cmd_M109_help = "Set Extruder Temperature and Wait"
-    cmd_M109_ready_only = True
-    def cmd_M109(self, params):
+    def _cmd__M109_ready_only(self, params):
+        'Set Extruder Temperature and Wait'
         self.cmd_M104(params, wait=True)
-    cmd_M112_help = "Full (Emergency) stop"
-    cmd_M112_ready_only = True
-    def cmd_M112(self, params):
+    def _cmd__M112_ready_only(self, params):
+        'Full (Emergency) stop'
         self.printer.call_shutdown("Shutdown due to M112 command")
-    cmd_M114_help = "Get current position"
-    cmd_M114_ready_only = True
-    def cmd_M114(self, params):
+    def _cmd__M114_ready_only(self, params):
+        'Get current position'
         p = self._get_gcode_position()
         self.respond("X:%.3f Y:%.3f Z:%.3f E:%.3f" % tuple(p))
-    cmd_M115_help = "Get firmware version and capabilities"
-    cmd_M115_ready_only = True
-    def cmd_M115(self, params):
+    def _cmd__M115_ready_only(self, params):
+        'Get firmware version and capabilities'
         software_version = self.printer.get_args().get('software_version')
         kw = {"FIRMWARE_NAME": "Klipper", "FIRMWARE_VERSION": software_version}
         self.ack(" ".join(["%s:%s" % (k, v) for k, v in kw.items()]))
-    cmd_M118_help = "Send a message to the host"
-    cmd_M118_ready_only = True
-    def cmd_M118(self, params):
+    def _cmd__M118_ready_only(self, params):
+        'Send a message to the host'
         if '#original' in params:
             msg = params['#original']
             if not msg.startswith('M118'):
@@ -873,12 +980,11 @@ class Gcode(Object):
             else:
                 msg = ''
             self.gcode.respond("%s %s" %(self.default_prefix, msg))
-    cmd_M119_help = "Get endstop status"
-    cmd_M119_ready_only = True
-    def cmd_M119(self, params):
+    def _cmd__M119_ready_only(self, params):
+        'Get endstop status'
         self.hal.get_controller().cmd_SHOW_ENDSTOPS(params)
-    cmd_M204_help = "Set default acceleration"
-    def cmd_M204(self, params):
+    def _cmd__M204(self, params):
+        'Set default acceleration'
         gcode = self.hal.get_gcode()
         if 'S' in params:
             # Use S for accel
@@ -891,23 +997,23 @@ class Gcode(Object):
             return
         toolhead.max_accel = min(accel, self.config_max_accel)
         toolhead._calc_junction_deviation()
-    cmd_M220_help = "Set speed factor override percentage"
-    def cmd_M220(self, params):
+    def _cmd__M220(self, params):
+        'Set speed factor override percentage'
         value = self.get_float('S', params, 100., above=0.) / (60. * 100.)
         self.speed = self._get_gcode_speed() * value
         self.speed_factor = value
-    cmd_M221_help = "Set extrude factor override percentage"
-    def cmd_M221(self, params):
+    def _cmd__M221(self, params):
+        'Set extrude factor override percentage'
         new_extrude_factor = self.get_float('S', params, 100., above=0.) / 100.
         last_e_pos = self.last_position[3]
         e_value = (last_e_pos - self.base_position[3]) / self.extrude_factor
         self.base_position[3] = last_e_pos - e_value * new_extrude_factor
         self.extrude_factor = new_extrude_factor
-    cmd_M400_help = "Wait for current moves to finish"
-    def cmd_M400(self, params):
+    def _cmd__M400(self, params):
+        'Wait for current moves to finish'
         self.toolhead.wait_moves()
-    cmd_GCODE_SET_OFFSET_help = "Set a virtual offset to g-code positions"
-    def cmd_GCODE_SET_OFFSET(self, params):
+    def _cmd__GCODE_SET_OFFSET(self, params):
+        'Set a virtual offset to g-code positions'
         move_delta = [0., 0., 0., 0.]
         for axis, pos in self.axis2pos.items():
             if axis in params:
@@ -927,8 +1033,8 @@ class Gcode(Object):
             for pos, delta in enumerate(move_delta):
                 self.last_position[pos] += delta
             self.move_with_transform(self.last_position, speed)
-    cmd_GCODE_SAVE_STATE_help = "Save G-Code coordinate state"
-    def cmd_GCODE_SAVE_STATE(self, params):
+    def _cmd__GCODE_SAVE_STATE(self, params):
+        'Save G-Code coordinate state'
         state_name = self.get_str('NAME', params, 'default')
         self.saved_states[state_name] = {
             'absolute_coord': self.absolute_coord,
@@ -939,8 +1045,8 @@ class Gcode(Object):
             'speed': self.speed, 'speed_factor': self.speed_factor,
             'extrude_factor': self.extrude_factor,
         }
-    cmd_GCODE_RESTORE_STATE_help = "Restore a previously saved G-Code state"
-    def cmd_GCODE_RESTORE_STATE(self, params):
+    def _cmd__GCODE_RESTORE_STATE(self, params):
+        'Restore a previously saved G-Code state'
         state_name = self.get_str('NAME', params, 'default')
         state = self.saved_states.get(state_name)
         if state is None:

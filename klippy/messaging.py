@@ -39,6 +39,7 @@ def msg(msg):
         else:
             string = MESSAGE_DESC[text.pop(0)]
             string = string % tuple(text)
+    print string
     return string
 
 # Klippy Error
