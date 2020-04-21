@@ -64,8 +64,6 @@ class Object(composite.Object):
         self.ready = True
     def register(self):
         self.hal.get_printer().event_register_handler("steppertracker:"+self.id()+":motor_off", self._motor_off)
-        if hasattr(self, "_dual-cart"):
-            self.hal.get_gcode(self.id()).register_command('SET_DUAL_CARRIAGE', self.cmd_SET_DUAL_CARRIAGE, desc=self.cmd_SET_DUAL_CARRIAGE_help)
     def get_steppers(self):
         rails = self.rails
         if self.dual_carriage_axis is not None:
@@ -151,8 +149,8 @@ class Object(composite.Object):
         toolhead.set_position(pos)
         if self.limits[dc_axis][0] <= self.limits[dc_axis][1]:
             self.limits[dc_axis] = dc_rail.get_range()
-    cmd_SET_DUAL_CARRIAGE_help = "Set which carriage is active"
     def cmd_SET_DUAL_CARRIAGE(self, params):
+        'Set which carriage is active.'
         gcode = self.hal.get_gcode()
         carriage = gcode.get_int('CARRIAGE', params, minval=0, maxval=1)
         self._activate_carriage(carriage)

@@ -56,7 +56,6 @@ class Main:
     #
     # set printer status
     def _set_status(self, message):
-        logging.info("SET_STATUS: %s", message)
         if self.status_message in (msg("ready"), msg("startup")):
             self.status_message = message
         if (message != msg("ready") and self.args.get('input_debug') is not None):
@@ -253,15 +252,12 @@ class Main:
         return reason
     #
     # commands
-    def _cmd__SHOW_PRINTER(self, params):
-        "Shows the printer's tree. Full details."
-        self.hal.get_commander().respond_info(self.tree.printer.show(plus="attrs,details,deep")+self.tree.spare.show(plus="deep"), log=False)
-    def _cmd__SHOW_PRINTER_TREE(self, params):
+    def _cmd__SHOW(self, params):
         "Shows the printer's topology."
         self.hal.get_commander().respond_info(self.tree.show(), log=False)
-    def _cmd__SHOW_PRINTER_STATUS(self, params):
-        "Shows the printer's status."
-        self.hal.get_commander().respond_info(str(self.get_status()), log=False)
+    def _cmd__SHOW_FULL(self, params):
+        "Shows the printer's tree. Full details."
+        self.hal.get_commander().respond_info(self.tree.printer.show(plus="attrs,details,deep")+self.tree.spare.show(plus="deep"), log=False)
 
 # tree and parts composer
 class Composer:

@@ -13,7 +13,7 @@
 import logging, re, collections, os, threading
 from messaging import msg
 from messaging import Kerr as error
-import part, console
+import part, composite, console
 
 class sentinel:
     pass
@@ -21,8 +21,8 @@ class sentinel:
 class CommandApi:
     def __init__(self):
         self.root = {}
-    # graft/remove/replace one command in the cmd tree
     def _graft(self, cmd, root):
+        'graft/remove/replace one command in the cmd tree'
         for w in cmd.keys():
             #print "_GRAFT: %s" % w
             if w in root.keys():
@@ -68,8 +68,8 @@ class CommandApi:
                 #print "\tOUTEST GRAFT %s" % cmd[w]
                 root[w] = cmd[w]
         return root
-    # prepare a command _obj_ and call grafting method
     def add(self, name, handler, ident = None, ready=False, desc=None):
+        'prepare a command _obj_ and call grafting method'
         parts = [part for part in name.split("_") if part != ""]
         cmd = {}
         cmdstr = ""
@@ -86,35 +86,57 @@ class CommandApi:
         else:
             root["_obj_"] = None
         self.root = self._graft(cmd, self.root)
-    # to be called from cmd.Cmd complete_ method
     def completion(self, text, line):
+        'completion tailored for cmd.Cmd complete_* method'
+        #print "\n\nTEXT |"+text+"|"
+        #print "LINE |"+line+"|"
         parts = line.split(" ")
-        parts.pop(0)
-        #print "\n%s PARTS %s" % (len(parts), parts)
-        if len(parts[0]) > 0:
-            i = 0
-            root = self.root
-            #print "TEXT %s %s" % (text, parts)
-            for p in parts:
-                if i == len(parts)-1:
-                    opts = []
-                    for k in root.keys():
-                        if k == "_obj_":
-                            continue
-                        if k.startswith(p):
-                            opts.append(k)
-                    #print "\tOPTIONS: "+str(opts)
-                    return opts
-                else:
-                    root = root[p]
-                    i = i+1
-            return root.keys()
-        else:
-            #print "\nTEXT None"
-            #print "\tOPTIONS: "+str(self.root.keys())
-            return self.root.keys()
-    # find and invoke handlers
+        # remove prefix
+        prefix = parts.pop(0)
+        #print "PARTS %s %s" % (len(parts), parts)
+        opts = []
+        # we have a word to check, let's search for the leaf
+        leaf = self.root
+        i = 0
+        lname = "root"
+        for p in parts:
+            if p in leaf.keys():
+                # p is a sub, go inside
+                leaf = leaf[p]
+                lname = p
+                i = i + 1
+        cparts = parts[:i]
+        aparts = parts[i:]
+        #print "LEAF ("+lname+") COMMAND ("+str(cparts)+") ARG ("+str(aparts)+")"
+        #
+        opts = []
+        # nodes
+        if len(aparts) > 0:
+            if len(aparts[0]) > 0:
+                for c in leaf.keys():
+                    if c.startswith(aparts[0]):
+                        if c != "_obj_":
+                            opts.append(c)
+            else:
+                for c in leaf.keys():
+                    if c != "_obj_":
+                        opts.append(c)
+        # leaves
+        if len(aparts) > 0:
+            if len(aparts[0]) > 0:
+                if "_obj_" in leaf:
+                    for o in leaf["_obj_"]:
+                        if "name" in o:
+                            if o["name"].startswith(aparts[0]):
+                                opts.append(" ".join(o["name"].split(" ")[len(aparts)-1:]))
+            else:
+                if "_obj_" in leaf:
+                    for o in leaf["_obj_"]:
+                        if "name" in o:
+                            opts.append(o["name"])
+        return opts
     def call(self, arg):
+        'find and invoke commands handlers'
         #print "\nLINE: %s" % arg
         parts = arg.split(" ")
         #print "\t%s PARTS %s" % (len(parts), parts)
@@ -130,14 +152,14 @@ class CommandApi:
                     continue
             command = " ".join(parts[:i]).strip()
             arg = " ".join(parts[i:]).strip()
-            #print "COMMAND ("+command+") ARG ("+arg+")"
+            print "COMMAND ("+command+") ARG ("+arg+")"
             if len(parts[i:]) == 0:
                 if "_obj_" in leaf:
                     for o in leaf["_obj_"]:
                         if "name" not in o:
                             #print "HANDLER: %s" % o
                             return o["handler"](None)
-                    print "Command not found: %s" % command
+                    print "Command error: %s" % command
                 else:
                     print "Command incomplete: %s" % command
             else:
@@ -150,8 +172,8 @@ class CommandApi:
                     print "Wrong command args '%s'" % arg
                 else:
                     print "Command incomplete: %s" % command
-    # show the command's path
     def show(self, root = None, indent = 1):
+        "show the command's path"
         if root == None: root = self.root
         for c in root:
             if c == "_obj_":
@@ -256,22 +278,23 @@ class Object(part.Object):
     def get_float(self, name, params, default=sentinel, minval=None, maxval=None, above=None, below=None):
         return self.get_str(name, params, default, parser=float, minval=minval, maxval=maxval, above=above, below=below)
     # (un)register command
-    def register_commands(self, obj, ident=None):
+    def register_commands(self, obj, ident=None, cmdr=None):
         # TODO check extended params ???
         #if not self._is_traditional_gcode(cmd):
         #    origfunc = func
         #    func = lambda params: origfunc(self._get_extended_params(params))
         #
+        if not cmdr: cmdr = self
         for m in sorted([method_name for method_name in dir(obj) if method_name.startswith("_cmd__") and not method_name.endswith("_aliases")]):
             name = m.replace("_cmd__", "").lower().strip()
             ro = False
             if m.endswith("_ready_only"):
                 ro = True
                 name = name.replace("_ready_only", "")
-            self.cmdroot.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
+            cmdr.cmdroot.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
             for a in getattr(obj, m + '_aliases', []):
                 name = a.replace("_cmd__", " ").lower().strip()
-                self.cmdroot.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
+                cmdr.cmdroot.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
     # scripts support
     def get_mutex(self):
         return self.mutex
@@ -289,15 +312,15 @@ class Object(part.Object):
         pass
     #
     # base commands
-    def _cmd__UNKNOWN(self, params):
-        'Echo an unknown command.'
-        self.respond_info(params['#original'], log=False)
     def _cmd__IGNORE(self, params):
         'Just silently accepted.'
         # Commands that are just silently accepted
         pass
     def _cmd__ECHO(self, params):
         'Echo a command.'
+        self.respond_info(params['#original'], log=False)
+    def _cmd__UNKNOWN(self, params):
+        'Echo an unknown command.'
         self.respond_info(params['#original'], log=False)
 
 # commander, commands receiver and dispatcher
@@ -328,16 +351,33 @@ class Dispatch(Object):
         self.console.cmdloop()
     #
     def register(self):
+        # special register_commands
+        for m in sorted([method_name for method_name in dir(self) if method_name.startswith("_cmd__") and not method_name.endswith("_aliases")]):
+            name = m.replace("_cmd__", "").lower().strip()
+            ro = False
+            if m.endswith("_ready_only"):
+                name = name.replace("_ready_only", "")
+                ro = True
+            pcmd = ["show_part", "show_part_full"]
+            ccmd = ["show_composite", "show_composite_full"]
+            for n in self.hal.node("printer").children_deep(list()):
+                if name in ccmd and self.hal.is_composite(n.object):
+                    self.cmdroot.add(name, getattr(self, m), n.name, ro, getattr(self, m).__doc__)
+                elif name in pcmd and self.hal.is_part(n.object) and not self.hal.is_composite(n.object):
+                    self.cmdroot.add(name, getattr(self, m), n.name, ro, getattr(self, m).__doc__)
+            if name not in pcmd and name not in ccmd:
+                self.cmdroot.add(name, getattr(self, m), self.name, ro, getattr(self, m).__doc__)
+                for a in getattr(self, m + '_aliases', []):
+                    name = a.replace("_cmd__", " ").lower().strip()
+                    self.cmdroot.add(name, getattr(self, m), self.name, ro, getattr(self, m).__doc__)
+        #
         self.printer.event_register_handler("klippy:ready", self._event_handle_ready)
         self.printer.event_register_handler("klippy:shutdown", self._event_handle_shutdown)
         self.printer.event_register_handler("klippy:disconnect", self._event_handle_disconnect)
-        #
-        self.register_commands(self)
         # spawn a thread to run printer's interactive console
         self.start_args = self.hal.get_printer().get_args()
         if 'console' in self.start_args:
             self.console = console.DispatchShell(self.hal, self.node(), self.cmdroot, self.start_args['console'])
-            self.console.cmdroot.show()
             self._console_th = threading.Thread(name="console", target=self._console_run)
             self._console_th.start()
             logging.debug("- Klippy command console started.")
@@ -527,6 +567,7 @@ class Dispatch(Object):
     def cleanup(self):
         if 'console' in self.start_args:
             self.console.cleanup()
+    #
     # printer commands
     def cmd_default(self, params):
         if not self.is_printer_ready:
@@ -550,21 +591,7 @@ class Dispatch(Object):
             # Don't warn about requests to turn off fan when fan not present
             return
         self.respond_info('Unknown command:"%s"' % (cmd,))
-    def cmd_RESTART(self, params):
-        'Reload config file and restart host software.'
-        self.request_restart('restart')
-    def cmd_RESTART_FIRMWARE(self, params):
-        'Restart firmware, host, and reload config.'
-        self.request_restart('restart_mcu')
-    def cmd_SHOW_STATUS(self, params):
-        'Report the printer status.'
-        if self.is_printer_ready:
-            self._respond_state("Ready")
-            return
-        msg = self.printer.get_status()
-        msg = msg.rstrip() + "\nKlipper state: Not ready"
-        self.respond_error(msg)
-    def cmd_HELP(self, params):
+    def _cmd__HELP(self, params):
         'Help.'
         cmdhelp = []
         if not self.is_printer_ready:
@@ -574,7 +601,7 @@ class Dispatch(Object):
             if cmd in self.help:
                 cmdhelp.append("%-10s: %s" % (cmd, self.help[cmd]))
         self.respond_info("\n".join(cmdhelp), log=False)
-    def cmd_RESPOND(self, params):
+    def _cmd__RESPOND(self, params):
         'Send a message to the host.'
         respond_type = self.gcode.get_str('TYPE', params, None)
         prefix = self.default_prefix
@@ -587,6 +614,34 @@ class Dispatch(Object):
         prefix = self.gcode.get_str('PREFIX', params, prefix)
         msg = self.gcode.get_str('MSG', params, '')
         self.gcode.respond("%s %s" %(prefix, msg))
+    def _cmd__RESTART(self, params):
+        'Reload config file and restart host software.'
+        self.request_restart('restart')
+    def _cmd__RESTART_FIRMWARE(self, params):
+        'Restart firmware, host, and reload config.'
+        self.request_restart('restart_mcu')
+    def _cmd__SHOW_PART(self, params):
+        'Shows information about a printer part.'
+        self.hal.get_commander().respond_info(self.node().show(plus="attrs"), log=False)
+    def _cmd__SHOW_PART_FULL(self, params):
+        'Shows information about a printer part. Full details.'
+        self.hal.get_commander().respond_info(self.node().show(plus="module,object,attrs,details"), log=False)
+    def _cmd__SHOW_COMPOSITE(self, params):
+        'Shows information about one tree branch.'
+        nodename = "???"
+        self.hal.get_commander().respond_info(self.node().show(plus="attrs,deep"), log=False)
+    def _cmd__SHOW_COMPOSITE_FULL(self, params):
+        'Shows information about one tree branch. Full details.'
+        nodename = "???"
+        self.hal.get_commander().respond_info(self.node().show(plus="module,object,attrs,details,deep"), log=False)
+    def _cmd__SHOW_STATUS(self, params):
+        'Report the printer status.'
+        if self.is_printer_ready:
+            self._respond_state("Ready")
+            return
+        msg = self.printer.get_status()
+        msg = msg.rstrip() + "\nKlipper state: Not ready"
+        self.respond_error(msg)
     #self.register_command("TOOLHEAD_ENABLE", self.cmd_TOOLHEAD_ENABLE, desc = self.cmd_TOOLHEAD_ENABLE_help)
 
 # gcode child commander, to use in conjunction with toolheads
@@ -612,8 +667,7 @@ class Gcode(Object):
         self.axis2pos = {'X': 0, 'Y': 1, 'Z': 2, 'E': 3}
         self.ready = True
     def register(self):
-        #
-        self.register_commands(self)
+        self.register_commands(self, None, self)
         # events
         self.hal.get_printer().event_register_handler("extruder:activate_extruder", self._handle_activate_extruder)
     # event handlers

@@ -106,8 +106,6 @@ class Object(composite.Object):
         self.setup_homing()
         self.ready = True
         return self
-    def register(self):
-        pass
     def setup_position_endstop(self, default_position_endstop = None):
         self.default_position_endstop = default_position_endstop
         mcu_endstop = self.endstop[0][0]

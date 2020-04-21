@@ -4,12 +4,12 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, os, sys, collections, importlib, cPickle as pickle
+import logging, os, sys, collections, importlib, inspect, cPickle as pickle
 from StringIO import StringIO
 
 from messaging import msg
 from messaging import Kerr as error
-import tree, commander, controller, timing, temperature, instrument
+import tree, commander, controller, timing, temperature, instrument, part, composite
 from parts import *
 
 class Manager:
@@ -44,6 +44,14 @@ class Manager:
     def add_cgroup(self, cgroup):
         self.cgroups.append(cgroup)
     # objects
+    def is_part(self, obj):
+        if eval("part.Object") in inspect.getmro(obj.__class__):
+            return True
+        return False
+    def is_composite(self, obj):
+        if eval("composite.Object") in inspect.getmro(obj.__class__):
+            return True
+        return False
     def obj(self, name):
         return self.node(name).object
     def obj_load(self, name):
@@ -197,3 +205,4 @@ class Manager:
         self.get_controller().cleanup()
         self.get_timing().cleanup()
         self.get_temperature().cleanup()
+

@@ -12,7 +12,7 @@
 import re, logging, math, zlib, collections
 from messaging import msg
 from messaging import Kerr as error
-import part, composite, chelper, serialhdl, timing
+import part, chelper, serialhdl, timing
 
 ######################################################################
 # Pins
@@ -1364,9 +1364,9 @@ class StepperEnableTracker:
 # Controller: multiboard mapper
 ######################################################################
 
-class Object(composite.Object):
+class Object(part.Object):
     def __init__(self, hal, node):
-        composite.Object.__init__(self,hal,node)
+        part.Object.__init__(self,hal,node)
         #
         self.board = {}
         self.board_ready = 0
@@ -1387,8 +1387,6 @@ class Object(composite.Object):
         for b in self.board:
             self.hal.get_printer().event_register_handler("board:"+b+":ready", self._event_handle_ready)
         self.hal.get_printer().event_register_handler("commander:request_restart", self._event_handle_request_restart)
-        #
-        self.hal.get_commander().register_commands(self)
     # events handlers
     def _event_handle_ready(self):
         self.board_ready = self.board_ready + 1

@@ -35,14 +35,4 @@ class Object():
         return self.name.split(" ")[1]
     def node(self):
         return self.hal.node(self.name)
-    def register(self):
-        self.hal.get_commander().register_commands(self, self.name)
-    #
-    # commands
-    def _cmd__SHOW_PART(self, params):
-        'Shows information about a printer part.'
-        self.hal.get_commander().respond_info(self.node().show(plus="attrs,children"), log=False)
-    def _cmd__SHOW_PART_FULL(self, params):
-        'Shows information about a printer part. Full details.'
-        self.hal.get_commander().respond_info(self.node().show(plus="attrs,children,details"), log=False)
 

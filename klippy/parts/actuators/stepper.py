@@ -279,9 +279,6 @@ class Object(actuator.Object):
         self.hal.get_controller().register_part(self.node())
         #
         self.ready = True
-    def register(self):
-        actuator.Object.register(self)
-        pass
     # calculate a move's accel_t, cruise_t, and cruise_v
     def _calc_move_time(self, dist, speed, accel):
         axis_r = 1.

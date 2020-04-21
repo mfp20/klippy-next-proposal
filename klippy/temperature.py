@@ -165,8 +165,6 @@ class Manager(part.Object):
         #self.printer.try_load_module(config, "verify_heater %s" % (self.name,))
     def register(self):
         self.hal.get_printer().event_register_handler("commander:request_restart", self._event_handler_off_all_actuators)
-        #
-        self.hal.get_commander().register_commands(self)
     # handlers
     def _command_handler_off_all_heaters(self, print_time=0.):
         for tcontrol in self.tcontroller.values():
