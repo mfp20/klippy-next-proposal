@@ -80,7 +80,7 @@ class PID:
         value_integ = max(0., min(self.value_integ_max, value_integ))
         # Calculate output
         co = self.Kp*value_err + self.Ki*value_integ - self.Kd*value_deriv
-        #logging.debug("pid: %f@%.3f -> diff=%f deriv=%f err=%f integ=%f co=%d",
+        #logger.debug("pid: %f@%.3f -> diff=%f deriv=%f err=%f integ=%f co=%d",
         #    value, readtime, value_diff, value_deriv, value_err, value_integ, co)
         bounded_co = max(0., min(self.max, co))
         # output
@@ -170,7 +170,7 @@ class AutoTune:
         Kp = 0.6 * Ku * heater.PID_PARAM_BASE
         Ki = Kp / Ti
         Kd = Kp * Td
-        logging.info("Autotune: raw=%f/%f Ku=%f Tu=%f  Kp=%f Ki=%f Kd=%f",
+        logger.info("Autotune: raw=%f/%f Ku=%f Tu=%f  Kp=%f Ki=%f Kd=%f",
                      temp_diff, self.heater_max_power, Ku, Tu, Kp, Ki, Kd)
         return Kp, Ki, Kd
     def calc_final_pid(self):

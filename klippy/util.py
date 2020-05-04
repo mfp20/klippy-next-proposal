@@ -4,7 +4,10 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import signal, pty, os, fcntl, termios, subprocess, logging
+import logging, signal, pty, os, fcntl, termios, subprocess
+from text import msg
+from error import KError as error
+logger = logging.getLogger(__name__)
 
 # Return the SIGINT interrupt handler back to the OS default
 def fix_sigint():
@@ -13,8 +16,7 @@ fix_sigint()
 
 # Set a file-descriptor as non-blocking
 def set_nonblock(fd):
-    fcntl.fcntl(fd, fcntl.F_SETFL
-                , fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_NONBLOCK)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_NONBLOCK)
 
 # Clear HUPCL flag
 def clear_hupcl(fd):
@@ -33,7 +35,7 @@ def create_pty(ptyname):
     except os.error:
         pass
     filename = os.ttyname(sfd)
-    os.chmod(filename, 0660)
+    os.chmod(filename, 0o660)
     os.symlink(filename, ptyname)
     set_nonblock(mfd)
     old = termios.tcgetattr(mfd)
@@ -43,12 +45,11 @@ def create_pty(ptyname):
 
 def get_cpu_info():
     try:
-        f = open('/proc/cpuinfo', 'rb')
+        f = open('/proc/cpuinfo', 'r')
         data = f.read()
         f.close()
-    except IOError, OSError:
-        logging.debug("Exception on read /proc/cpuinfo: %s",
-                      traceback.format_exc())
+    except (IOError, OSError):
+        logger.exception("Exception on read /proc/cpuinfo: %s", traceback.format_exc())
         return "?"
     lines = [l.split(':', 1) for l in data.split('\n')]
     lines = [(l[0].strip(), l[1].strip()) for l in lines if len(l) == 2]
@@ -72,26 +73,24 @@ def get_git_version(from_file=True):
     prog = ('git', '-C', gitdir, 'describe', '--always',
             '--tags', '--long', '--dirty')
     try:
-        process = subprocess.Popen(prog, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE)
+        process = subprocess.Popen(prog, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         ver, err = process.communicate()
         retcode = process.wait()
         if retcode == 0:
             return ver.strip()
         else:
-            logging.debug("Error getting git version: %s", err)
+            logger.warning("Error getting git version:\n%s", err.decode())
     except OSError:
-        logging.debug("Exception on run: %s", traceback.format_exc())
-
+        logger.exception("Exception on run: %s", traceback.format_exc())
     if from_file:
         return get_version_from_file(klippy_src)
     return "?"
 
-# show object methods and vars
+# show methods and vars
 def show_methods(obj):
-    logging.info("OBJ '%s'", obj)
+    logger.info("OBJ '%s'", obj)
     for m in sorted([method_name for method_name in dir(obj) if callable(getattr(obj, method_name))]):
-        logging.info("\tMETHOD: %s", m)
+        logger.info("\tMETHOD: %s", m)
     for a in sorted(vars(obj)):
-        logging.info("\tVAR: %s VALUE %s", a, getattr(obj, a))
+        logger.info("\tVAR: %s VALUE %s", a, getattr(obj, a))
 

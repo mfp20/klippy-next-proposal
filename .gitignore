@@ -1,6 +1,7 @@
 out
 *.so
 *.pyc
+__pycache__
 .config
 .config.old
 klippy/.version

@@ -1,26 +1,21 @@
-# Temperature Control (Tcontrol) composite part.
+# Temperature controller (Tcontrol) composite.
 #
 # Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
-# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging, threading, copy, math
-from messaging import msg
-from messaging import Kerr as error
-import composite, controller, governor
+from text import msg
+from error import KError as error
+import tree, controller, governor
+logger = logging.getLogger(__name__)
 
-#
-# Tcontrol
-#
-
-ATTRS = ("type", "min", "max", "control")
-
-class Dummy(composite.Object):
-    def __init__(self, hal, node):
-        composite.Object.__init__(self, hal, node)
-        logging.warning("(%s) tcontrol.Dummy", self.name)
-    def init():
+class Dummy(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal)
+        logger.warning("(%s) tcontrol.Dummy", name)
+    def _init():
         if self.ready:
             return
         # TODO 
@@ -34,16 +29,17 @@ ALUMINIUM_OPERATING = 400.00
 MAX_HEAT_TIME = 5.0
 PID_PARAM_BASE = 255.
 OBJ = {"pin": None, "gov": None, "min": None, "target": None, "max": None, "current": None, "smoothed": None, "last": None}
-class Object(composite.Object):
-    def __init__(self, hal, node):
-        composite.Object.__init__(self, hal, node)
+class Object(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
+        self.metaconf["type"] = {"t":"str"}
         self.metaconf["control"] = {"t":"choice", "choices":{"watermark": "watermark", "pid": "pid"}}
         self.metaconf["smooth_time"] = {"t":"float", "default":2., "above":0.}
         self.metaconf["min"] = {"t":"float", "default":0., "minval":KELVIN_TO_CELSIUS}
         self.metaconf["max"] = {"t":"float", "default":250., "maxval":ALUMINIUM_OPERATING, "above":"self._min"}
         self.metaconf["temp_ambient"] = {"t":"float", "default":25., "above":4., "maxval":100.}
         self.metaconf["pwm_cycle_time"] = {"t":"float", "default":-1.100, "above":0.}
-    def init(self):
+    def _init(self):
         if self.ready:
             return
         # capabilities
@@ -83,10 +79,10 @@ class Object(composite.Object):
         #   - more complex relations must be established in other ways
         if len(self.thermometer) > 0:
             if len(self.heater) == 0 and len(self.cooler) == 0:
-                #logging.debug("Pure sensor, no temperature adjust (%s)", self.name)
+                #logger.debug("Pure sensor, no temperature adjust (%s)", self.name)
                 pass
             elif len(self.heater) > 0 and len(self.cooler) == 0 and not self.capas["humidity"] and not self.capas["pressure"]:
-                #logging.debug("Pure heater (%s)", self.name)
+                #logger.debug("Pure heater (%s)", self.name)
                 # get maximum allowable power among all heaters
                 maxpower = 1.
                 for h in self.heater.values():
@@ -100,7 +96,7 @@ class Object(composite.Object):
                 # first thermometer in command
                 self.thermometer[next(iter(self.thermometer))]["gov"] = gov
             elif (len(self.heater) == 0) and (len(self.cooler) > 0) and not self.capas["humidity"] and not self.capas["pressure"]:
-                #logging.debug("Pure cooler (%s)", self.name)
+                #logger.debug("Pure cooler (%s)", self.name)
                 # get maximum allowable power among all coolers
                 maxpower = 1.
                 for c in self.cooler.values():
@@ -113,7 +109,7 @@ class Object(composite.Object):
                 # first thermometer in command
                 self.thermometer[next(iter(self.thermometer))]["gov"] = gov
             elif len(self.thermometer) == len(self.heater) and len(self.heater) == len(self.cooler):
-                #logging.debug("Thermometer (%d), heater (%d), cooler (%d), (%s)", len(self.thermometer), len(self.heater), len(self.cooler), self.name)
+                #logger.debug("Thermometer (%d), heater (%d), cooler (%d), (%s)", len(self.thermometer), len(self.heater), len(self.cooler), self.name)
                 # get maximum allowable power among all heaters
                 maxpower = 1.
                 # TODO FIX POWER_MAX!!!!!!
@@ -135,7 +131,7 @@ class Object(composite.Object):
             else:
                 raise error("Unknown sensors(%d)-actuators(%d) combo." % (len(self.thermometer)+len(self.hygrometer)+len(self.barometer), len(self.heater)+len(self.cooler)))
         elif len(self.thermometer) == 0:
-            #logging.debug("No Thermometer, misc sensors/heaters/coolers, always off (%s)." % self.name)
+            #logger.debug("No Thermometer, misc sensors/heaters/coolers, always off (%s)." % self.name)
             for h in self.heater:
                 self.heater[c]["gov"] = self.govoff
             for c in self.cooler:
@@ -143,7 +139,7 @@ class Object(composite.Object):
         else :
             raise error("Unknown sensors(%d)-actuators(%d) combo." % (len(self.thermometer)+len(self.hygrometer)+len(self.barometer), len(self.heater)+len(self.cooler)))
         #
-        self.hal.get_temperature().tc_register(self.node())
+        self.hal.get_temperature().tc_register(self)
         self.ready = True
     def register(self):
         #gcode = self.hal.get_my_gcode(tc)
@@ -162,11 +158,11 @@ class Object(composite.Object):
             #else:
             startvalue = self._temp_ambient
             return governor.PID(self._pid_kp / PID_PARAM_BASE, self._pid_ki / PID_PARAM_BASE, self._pid_kd / PID_PARAM_BASE, self._power_max, self._smooth_time, self._pid_integral_max, startvalue)
-    # register objects
+    # registers
     def _register_thermometer(self, node):
         # set defaults
         self.thermometer[node.name] = OBJ.copy()
-        self.thermometer[node.name]["pin"] = node.object
+        self.thermometer[node.name]["pin"] = node
         self.thermometer[node.name]["gov"] = self.govoff
         self.thermometer[node.name]["min"] = self._min
         self.thermometer[node.name]["target"] = 0.
@@ -174,16 +170,16 @@ class Object(composite.Object):
         self.thermometer[node.name]["current"] = 0.
         self.thermometer[node.name]["smoothed"] = 0.
         # setup sensor
-        node.object.setup_minmax(self.thermometer[node.name]["min"],  self.thermometer[node.name]["max"])
-        node.object.setup_cb(self._temperature_callback)
+        node.setup_minmax(self.thermometer[node.name]["min"],  self.thermometer[node.name]["max"])
+        node.setup_cb(self._temperature_callback)
         self.set_pwm_delay(self.thermometer[node.name]["pin"].get_report_time_delta())
         # adapt max temp (in case this part can't withstand higher temperatures)
-        self.alter_max_temp(node.object._temp_max)
+        self.alter_max_temp(node._temp_max)
         self.capas["temperature"] = True
     def _register_hygrometer(self, node):
         # set defaults
         self.hygrometer[node.name] = OBJ.copy()
-        self.hygrometer[node.name]["pin"] = node.object
+        self.hygrometer[node.name]["pin"] = node
         self.hygrometer[node.name]["gov"] = self.govoff
         self.hygrometer[node.name]["min"] = node.conf_get_float("hygro_min", minval=0)
         self.hygrometer[node.name]["target"] = 0.
@@ -193,12 +189,12 @@ class Object(composite.Object):
         # setup sensor
         # TODO
         # adapt max temp (in case this part can't withstand higher temperatures)
-        self.alter_max_temp(node.object._temp_max)
+        self.alter_max_temp(node._temp_max)
         self.capas["humidity"] = True
     def _register_barometer(self, node):
         # set defaults
         self.barometer[node.name] = OBJ.copy()
-        self.barometer[node.name]["pin"] = node.object
+        self.barometer[node.name]["pin"] = node
         self.barometer[node.name]["gov"] = self.govoff
         self.barometer[node.name]["min"] = node.conf_get_float("baro_min", minval=0)
         self.barometer[node.name]["target"] = 0.
@@ -208,41 +204,41 @@ class Object(composite.Object):
         # setup sensor
         # TODO
         # adapt max temp (in case this part can't withstand higher temperatures)
-        self.alter_max_temp(node.object._temp_max)
+        self.alter_max_temp(node._temp_max)
         self.capas["pressure"] = True
     def _register_heater(self, node):
-        if isinstance(node.object.pin, controller.MCU_pin_out_pwm):
+        if isinstance(node.pin, controller.MCU_pin_out_pwm):
             pwm_cycle_time = self._pwm_cycle_time
             if self._pwm_cycle_time > self.pwm_delay:
                 self._pwm_cycle_time = self.pwm_delay
-            node.object.pin.setup_cycle_time(pwm_cycle_time)
-        node.object.pin[node.object._pin].setup_max_duration(MAX_HEAT_TIME)
+            node.pin.setup_cycle_time(pwm_cycle_time)
+        node.pin[node._pin].setup_max_duration(MAX_HEAT_TIME)
         # set defaults
         self.heater[node.name] = OBJ.copy()
-        self.heater[node.name]["pin"] = node.object
+        self.heater[node.name]["pin"] = node
         self.heater[node.name]["gov"] = self.govoff
-        self.heater[node.name]["min"] = node.object._min
+        self.heater[node.name]["min"] = node._min
         self.heater[node.name]["target"] = 0.
-        self.heater[node.name]["max"] = node.object._max
+        self.heater[node.name]["max"] = node._max
         self.heater[node.name]["current"] = 0.
         self.heater[node.name]["smoothed"] = 0.
         # adapt max temp (in case this part can't withstand higher temperatures)
-        self.alter_max_temp(node.object._temp_max)
+        self.alter_max_temp(node._temp_max)
         self.capas["heat"] = True
     def _register_cooler(self, node):
         # set defaults
         self.cooler[node.name] = OBJ.copy()
-        self.cooler[node.name]["pin"] = node.object
+        self.cooler[node.name]["pin"] = node
         self.cooler[node.name]["gov"] = self.govoff
-        self.cooler[node.name]["min"] = node.object._min
+        self.cooler[node.name]["min"] = node._min
         self.cooler[node.name]["target"] = 0.
-        self.cooler[node.name]["max"] = node.object._max
+        self.cooler[node.name]["max"] = node._max
         self.cooler[node.name]["current"] = 0.
         self.cooler[node.name]["smoothed"] = 0.
         # adapt max temp (in case this part can't withstand higher temperatures)
-        self.alter_max_temp(node.object._temp_max)
+        self.alter_max_temp(node._temp_max)
         self.capas["cool"] = True
-    # get objects
+    # gets
     def get_thermometer(name):
         return self.thermometer[name]
     def get_hygrometer(name):
@@ -312,7 +308,7 @@ class Object(composite.Object):
             else:
                 cvalue = 0.
             # apply
-            logging.debug("%s coolers pwm value: %s", self.node.name, cvalue)
+            logger.debug("%s coolers pwm value: %s", self.node.name, cvalue)
             c.pin.set_pwm(pwm_time, cvalue)
     # set both pwm output value
     def set_output(self, pwm_time, value, sensorname):
@@ -320,7 +316,7 @@ class Object(composite.Object):
         self.set_coolers(pwm_time, value, sensorname)
     # adjust temp by modifying pwm output
     def _adj_temp(self, read_time, value, sensorname):
-        #logging.debug("%s governor pwm value: %s", self.node.name, value)
+        #logger.debug("%s governor pwm value: %s", self.node.name, value)
         sensor = self.thermometer[sensorname]
         # off
         if sensor["target"] <= 0.:
@@ -334,7 +330,7 @@ class Object(composite.Object):
         self.last_pwm_value = value
         # value calculation
         # TODO, check value limited := [0.0,1.0], in order to invert it easy
-        logging.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])", self.node.name, value, pwm_time, sensor["current"], self.last_time, sensor["target"])
+        logger.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])", self.node.name, value, pwm_time, sensor["current"], self.last_time, sensor["target"])
         # output
         self.set_output(pwm_time, value, sensorname)
     # 
@@ -361,7 +357,7 @@ class Object(composite.Object):
                 sensor["current"] = temp
                 sensor["last"] = read_time
         # TODO check they are updated
-        #logging.debug("%s: current=%s time=%s", sensorname, sensor["current"], sensor["last"])
+        #logger.debug("%s: current=%s time=%s", sensorname, sensor["current"], sensor["last"])
     def _humidity_callback(self, read_time, hum, sensorname):
         if sensorname in self.hygrometer:
             sensor = self.hygrometer[sensorname]
@@ -418,10 +414,10 @@ class Object(composite.Object):
             sensor["target"] = degrees
     def set_off_heaters(self, degrees):
         # TODO
-        logging.warning("TODO set_off_heaters")
+        logger.warning("TODO set_off_heaters")
     def set_off_coolers(self, degrees):
         # TODO
-        logging.warning("TODO set_off_coolers")
+        logger.warning("TODO set_off_coolers")
     def check_busy(self, eventtime, sensor = None):
         if not sensor:
             sensor = self.thermometer[next(iter(self.thermometer))]
@@ -462,19 +458,21 @@ class Object(composite.Object):
             smoothed_temp = sensor["smoothed"]
         return {'temperature': smoothed_temp, 'target': target_temp}
 
-def load_node_object(hal, node):
-    if node.attrs_check():
-        node.object = Object(hal, node)
-        if node.attr("control") == "watermark":
-            node.object.metaconf["delta_max"] = {"t":"float", "default":2.0, "above":0.}
-        if node.attr("control") == "pid":
-            node.object.metaconf["pid_kp"] = {"t":"float"}
-            node.object.metaconf["pid_ki"] = {"t":"float"}
-            node.object.metaconf["pid_kd"] = {"t":"float"}
-            # TODO FIX _POWER_MAX!!!
-            node.object.metaconf["pid_integral_max"] = {"t":"float", "default":1., "minval":0.}
-            #node.object.metaconf["pid_integral_max"] = {"t":"float", "default":self._power_max, "minval":0.}
-    else:
-        node.object = Dummy(hal,node)
-    return node.object
+ATTRS = ("type", "min", "max", "control")
+def load_node(name, hal, cparser = None):
+    #if node.attrs_check():
+    node = Object(name, hal)
+    control = cparser.get(name, "control")
+    if control == "watermark":
+        node.metaconf["delta_max"] = {"t":"float", "default":2.0, "above":0.}
+    if control == "pid":
+        node.metaconf["pid_kp"] = {"t":"float"}
+        node.metaconf["pid_ki"] = {"t":"float"}
+        node.metaconf["pid_kd"] = {"t":"float"}
+        # TODO FIX _POWER_MAX!!!
+        node.metaconf["pid_integral_max"] = {"t":"float", "default":1., "minval":0.}
+        #node.metaconf["pid_integral_max"] = {"t":"float", "default":self._power_max, "minval":0.}
+    #else:
+    #    node = Dummy(hal,node)
+    return node
 

@@ -1,4 +1,4 @@
-# Obtain temperature using linear interpolation of ADC values
+# Thermometer sensor support.
 #
 # Copyright (C) 2016-2018  Kevin O'Connor <kevin@koconnor.net>
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
@@ -6,9 +6,11 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging, bisect, math, random
-from messaging import msg
-from messaging import Kerr as error
+from text import msg
+from error import KError as error
+import tree
 from parts import sensor
+logger = logging.getLogger(__name__)
 
 KELVIN_TO_CELSIUS = -273.15
 
@@ -163,12 +165,12 @@ class LinearInterpolate:
 # Linear voltage calibrated from temperature measurements
 class LinearVoltage:
     def __init__(self, name, voltage, offset, params):
-        #logging.debug("                 LINEAR VOLTAGE %s %s %s %s", name, voltage, offset, params)
+        #logger.debug("                 LINEAR VOLTAGE %s %s %s %s", name, voltage, offset, params)
         samples = []
         for temp, volt in params:
             adc = (volt - offset) / voltage
             if adc < 0. or adc > 1.:
-                logging.warn("Ignoring adc sample %.3f/%.3f in heater %s", temp, volt, name)
+                logger.warn("Ignoring adc sample %.3f/%.3f in heater %s", temp, volt, name)
                 continue
             samples.append((adc, temp))
         try:
@@ -181,7 +183,7 @@ class LinearVoltage:
 # Linear resistance calibrated from temperature measurements
 class LinearResistance:
     def __init__(self, name, pullup, samples):
-        #logging.debug("                 LINEAR RESISTANCE %s %s %s", name, pullup, samples)
+        #logger.debug("                 LINEAR RESISTANCE %s %s %s", name, pullup, samples)
         try:
             self.li = LinearInterpolate([(r, t) for t, r in samples])
         except ValueError as e:
@@ -199,7 +201,7 @@ class LinearResistance:
 # Non linear approximation (Steinhart-Hart)
 class NonLinearResistance:
     def __init__(self, name, pullup, inline_resistor, params):
-        #logging.debug("                 NON LINEAR RESISTANCE %s %s %s %s", name, pullup, inline_resistor, params)
+        #logger.debug("                 NON LINEAR RESISTANCE %s %s %s %s", name, pullup, inline_resistor, params)
         self.pullup = pullup
         self.inline_resistor = inline_resistor
         self.c1 = self.c2 = self.c3 = 0.
@@ -227,7 +229,7 @@ class NonLinearResistance:
         self.c3 = ((inv_t12 - inv_t13 * ln_r12 / ln_r13) / (ln3_r12 - ln3_r13 * ln_r12 / ln_r13))
         if self.c3 <= 0.:
             beta = ln_r13 / inv_t13
-            logging.warn("Using thermistor beta %.3f in heater %s", beta, self.name)
+            logger.warn("Using thermistor beta %.3f in heater %s", beta, self.name)
             self.setup_coefficients_beta(t1, r1, beta)
             return
         self.c2 = (inv_t12 - self.c3 * ln3_r12) / ln_r12
@@ -305,10 +307,10 @@ RANGE_CHECK_COUNT = 4
 
 # TODO: change the current random generation with a PID
 class Dummy(sensor.Object):
-    def __init__(self, hal, node):
-        sensor.Object(hal,node)
-        logging.warning("(%s) thermometer.Dummy", self.name)
-    def configure(self):
+    def __init__(self, name, hal):
+        super().Object(name, hal)
+        logger.warning("(%s) thermometer.Dummy", self.name())
+    def _configure(self):
         if self.ready:
             return
         self.sensor = None
@@ -379,20 +381,20 @@ class Dummy(sensor.Object):
     def get_report_time_delta(self):
         return REPORT_TIME
 
-# the real object base class
+# the real base class
 class Object(sensor.Object):
-    def __init__(self,hal,node):
-        sensor.Object.__init__(self,hal,node)
+    def __init__(self, name, hal):
+        super().__init__(name, hal)
 
 # analog pin connected thermometer
 # TODO attrs checks for each model of sensor
 # TODO test custom sensors
 class ADC(Object):
-    def __init__(self, hal, node, params):
-        Object.__init__(self,hal,node)
+    def __init__(self, name, hal, params):
+        super().__init__(name, hal)
         self._params = params
         self.probe = None
-    def configure(self):
+    def _configure(self):
         if self.ready:
             return
         # non linear approximation (Steinhart-Hart) probe
@@ -419,7 +421,7 @@ class ADC(Object):
         self.pin[self._pin] = self.hal.get_controller().pin_setup("in_adc", self._pin)
         self.pin[self._pin].setup_callback(REPORT_TIME, self._cb)
         #
-        self.hal.get_controller().register_part(self.node())
+        self.hal.get_controller().register_part(self)
         self.ready = True
     def register(self):
         # register thermometer
@@ -439,11 +441,11 @@ class ADC(Object):
 # I2C bus connected thermometer
 # TODO
 class I2C(sensor.Object):
-    def __init__(self, hal, node, params):
-        Object.__init__(self,hal,node)
-        logging.warning("TODO i2c thermometer")
+    def __init__(self, name, hal, params):
+        super().__init__(name, hal)
+        logger.warning("TODO i2c thermometer")
         self.probe = None
-    def configure(self):
+    def _configure(self):
         if self.ready:
             return
         # TODO
@@ -463,11 +465,11 @@ class I2C(sensor.Object):
 # SPI bus connected thermometer
 # TODO
 class SPI(sensor.Object):
-    def __init__(self, hal, node, params):
-        Object.__init__(self,hal,node)
-        logging.warning("TODO spi thermometer")
+    def __init__(self, name, hal, params):
+        super().__init__(name, hal)
+        logger.warning("TODO spi thermometer")
         self.probe = None
-    def configure(self):
+    def _configure(self):
         if self.ready:
             return
         # TODO
@@ -487,11 +489,11 @@ class SPI(sensor.Object):
 # custom thermometer
 # TODO
 class Custom(sensor.Object):
-    def __init__(self, hal, node, params):
-        Object.__init__(self,hal,node)
-        logging.warning("TODO custom thermometer")
+    def __init__(self, name, hal, params):
+        super().__init__(name, hal)
+        logger.warning("TODO custom thermometer")
         self.probe = None
-    def configure(self):
+    def _configure(self):
         if self.ready:
             return
         # TODO
@@ -532,53 +534,56 @@ class Custom(sensor.Object):
         return REPORT_TIME
 
 ATTRS = ("type","model")
-def load_node_object(hal, node):
-    if node.attrs_check():
-        if node.attr("model") in thermistor:
-            node.object = ADC(hal, node, thermistor[node.attr("model")])
-            node.object.metaconf["model"] = {"t":"str"}
-            node.object.metaconf["pin"] = {"t": "str"}
-            node.object.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
-            node.object.metaconf["inline"] = {"t":"float", "default":0., "minval":0.}
-        elif node.attr("model") in adc_voltage:
-            node.object = ADC(hal, node, adc_voltage[node.attr("model")])
-            node.object.metaconf["model"] = {"t":"str"}
-            node.object.metaconf["pin"] = {"t": "str"}
-            node.object.metaconf["voltage"] = {"t":"float", "default":5., "above":0.}
-            node.object.metaconf["offset"] = {"t":"float", "default":0.}
-        elif node.attr("model") in adc_resistance:
-            node.object = ADC(hal, node, adc_resistance[node.attr("model")])
-            node.object.metaconf["model"] = {"t":"str"}
-            node.object.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
-        elif node.attr("model") in i2c:
+def load_node(name, hal, cparser):
+    node = None
+    #if node.attrs_check():
+    if 1:
+        model = cparser.get(name, "model")
+        if model in thermistor:
+            node = ADC(name, hal, thermistor[model])
+            node.metaconf["model"] = {"t":"str"}
+            node.metaconf["pin"] = {"t": "str"}
+            node.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
+            node.metaconf["inline"] = {"t":"float", "default":0., "minval":0.}
+        elif model in adc_voltage:
+            node = ADC(name, hal, adc_voltage[model])
+            node.metaconf["model"] = {"t":"str"}
+            node.metaconf["pin"] = {"t": "str"}
+            node.metaconf["voltage"] = {"t":"float", "default":5., "above":0.}
+            node.metaconf["offset"] = {"t":"float", "default":0.}
+        elif model in adc_resistance:
+            node = ADC(name, hal, adc_resistance[model])
+            node.metaconf["model"] = {"t":"str"}
+            node.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
+        elif model in i2c:
             # TODO
             bus = None
-            node.object = I2C(hal, node)
-            node.object.metaconf["model"] = {"t":"str"}
-            node.object.metaconf["bus"] = {"t": "str"}
-            node.object.metaconf["samples"] = {"t":"str"}
-        elif node.attr("model") in spi:
+            node = I2C(name, hal)
+            node.metaconf["model"] = {"t":"str"}
+            node.metaconf["bus"] = {"t": "str"}
+            node.metaconf["samples"] = {"t":"str"}
+        elif model in spi:
             # TODO
             bus = None
-            node.object = SPI(hal, node, bus)
-            node.object.metaconf["model"] = {"t":"str"}
-            node.object.metaconf["bus"] = {"t": "str"}
-            node.object.metaconf["samples"] = {"t":"str"}
-        elif node.attr("model").startswith("custom "):
+            node = SPI(name, hal, bus)
+            node.metaconf["model"] = {"t":"str"}
+            node.metaconf["bus"] = {"t": "str"}
+            node.metaconf["samples"] = {"t":"str"}
+        elif model.startswith("custom "):
             # TODO
-            node.object = Custom(hal, node, bus)
-            node.object.metaconf["model"] = {"t":"str"}
-            node.object.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
-            node.object.metaconf["inline"] = {"t":"float", "default":0., "minval":0.}
-            node.object.metaconf["samples"] = {"t":"str"}
-            #node.object.metaconf["t1"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
-            #node.object.metaconf["r1"] = {"t":"float", "minval":0.}
-            #node.object.metaconf["beta"] = {"t":"float", "default":None, "above":0.}
-            #node.object.metaconf["t2"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
-            #node.object.metaconf["r2"] = {"t":"float", "minval":0.}
-            #node.object.metaconf["t3"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
-            #node.object.metaconf["r3"] = {"t":"float", "minval":0.}
-        node.object.metaconf["type"] = {"t":"str", "default":"thermometer"}
-    else:
-        node.object = Dummy(hal,node)
-    return node.object
+            node = Custom(name, hal, bus)
+            node.metaconf["model"] = {"t":"str"}
+            node.metaconf["pullup"] = {"t":"float", "default":4700., "above":0.}
+            node.metaconf["inline"] = {"t":"float", "default":0., "minval":0.}
+            node.metaconf["samples"] = {"t":"str"}
+            #node.metaconf["t1"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
+            #node.metaconf["r1"] = {"t":"float", "minval":0.}
+            #node.metaconf["beta"] = {"t":"float", "default":None, "above":0.}
+            #node.metaconf["t2"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
+            #node.metaconf["r2"] = {"t":"float", "minval":0.}
+            #node.metaconf["t3"] = {"t":"float", "minval":KELVIN_TO_CELSIUS}
+            #node.metaconf["r3"] = {"t":"float", "minval":0.}
+        node.metaconf["type"] = {"t":"str", "default":"thermometer"}
+    #else:
+    #    node = Dummy(name, hal)
+    return node

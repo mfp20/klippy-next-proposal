@@ -1,21 +1,25 @@
 # Micro-controller clock synchronization
 #
 # Copyright (C) 2016-2018  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, math
-import part
+import logging, sys, math
+from text import msg
+from error import KError as error
+import tree
+logger = logging.getLogger(__name__)
 
 RTT_AGE = .000010 / (60. * 60.)
 DECAY = 1. / 30.
 TRANSMIT_EXTRA = .001
 
-class Primary(part.Object):
-    def __init__(self, hal, node):
-        part.Object.__init__(self, hal, node)
+class Primary(tree.Part):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.serial = None
-        self.get_clock_timer = self.hal.get_reactor().register_timer(self._get_clock_event)
+        self.get_clock_timer = self.hal.get_reactor().timer_register(self._get_clock_event)
         self.get_clock_cmd = self.cmd_queue = None
         self.queries_pending = 0
         self.mcu_freq = 1.
@@ -30,6 +34,9 @@ class Primary(part.Object):
         self.prediction_variance = 0.
         self.last_prediction_time = 0.
         self.ready = True
+    def _show_details(self, indent = 0):
+        "Return formatted details about time controller node."
+        return ""
     def connect(self, serial):
         self.serial = serial
         self.mcu_freq = serial.msgparser.get_constant_float('CLOCK_FREQ')
@@ -82,7 +89,7 @@ class Primary(part.Object):
         if half_rtt < self.min_half_rtt + aged_rtt:
             self.min_half_rtt = half_rtt
             self.min_rtt_time = sent_time
-            logging.debug("new minimum rtt %.3f: hrtt=%.6f freq=%d", sent_time, half_rtt, self.clock_est[2])
+            logger.debug("new minimum rtt %.3f: hrtt=%.6f freq=%d", sent_time, half_rtt, self.clock_est[2])
         # Filter out samples that are extreme outliers
         exp_clock = ((sent_time - self.time_avg) * self.clock_est[2]
                      + self.clock_avg)
@@ -90,10 +97,10 @@ class Primary(part.Object):
         if (clock_diff2 > 25. * self.prediction_variance
             and clock_diff2 > (.000500 * self.mcu_freq)**2):
             if clock > exp_clock and sent_time < self.last_prediction_time+10.:
-                logging.debug("Ignoring clock sample %.3f: freq=%d diff=%d stddev=%.3f",
+                logger.debug("Ignoring clock sample %.3f: freq=%d diff=%d stddev=%.3f",
                               sent_time, self.clock_est[2], clock - exp_clock, math.sqrt(self.prediction_variance))
                 return
-            logging.info("Resetting prediction variance %.3f: freq=%d diff=%d stddev=%.3f",
+            logger.info("Resetting prediction variance %.3f: freq=%d diff=%d stddev=%.3f",
                          sent_time, self.clock_est[2], clock - exp_clock, math.sqrt(self.prediction_variance))
             self.prediction_variance = (.001 * self.mcu_freq)**2
         else:
@@ -111,7 +118,7 @@ class Primary(part.Object):
         pred_stddev = math.sqrt(self.prediction_variance)
         self.serial.set_clock_est(new_freq, self.time_avg + TRANSMIT_EXTRA, int(self.clock_avg - 3. * pred_stddev))
         self.clock_est = (self.time_avg + self.min_half_rtt, self.clock_avg, new_freq)
-        #logging.debug("regr %.3f: freq=%.3f d=%d(%.3f)",
+        #logger.debug("regr %.3f: freq=%.3f d=%d(%.3f)",
         #              sent_time, new_freq, clock - exp_clock, pred_stddev)
     # clock frequency conversions
     def print_time_to_clock(self, print_time):
@@ -159,8 +166,8 @@ class Primary(part.Object):
 # Clock syncing code for secondary MCUs (whose clocks are sync'ed to a
 # primary MCU)
 class Secondary(Primary):
-    def __init__(self, hal, reactor, main_sync):
-        Primary.__init__(self, hal, None)
+    def __init__(self, hal, main_sync):
+        super().__init__("secondary", hal)
         self.main_sync = main_sync
         self.clock_adj = (0., 1.)
         self.last_sync_time = 0.
@@ -214,6 +221,5 @@ class Secondary(Primary):
         self.last_sync_time = sync2_print_time
         return self.clock_adj
 
-def load_node_object(hal, node):
-    node.object = Primary(hal, node)
-    return node.object
+def load_node(name, hal):
+    return Primary(name, hal)

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # cleanup previus run (if any)
-pkill -f "python2 ~/klipper/scripts/avrsim.py"
+pkill -f "python3 ~/tre/scripts/avrsim.py"
 rm avrsim*.vcd
 
 # amount to spawn
@@ -16,7 +16,7 @@ fi
 # spawn new
 TAILS=""
 for i in $(seq 1 $END); do
-	PYTHONPATH=~/simulavr/src/python/ ~/klipper/scripts/avrsim.py \
+	PYTHONPATH=~/simulavr/src/python/ ~/tre/scripts/avrsim.py \
 		-m atmega644 -s 20000000 \
 		-p /tmp/simulavr${i} -b 250000 \
 		-t PORTA.PORT,PORTB.PORT,PORTC.PORT -f avrsim${i}.vcd \

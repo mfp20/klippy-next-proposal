@@ -11,7 +11,7 @@
 #include "compiler.h" // unlikely
 #include "trapq.h" // move_get_coord
 
-// Allocate a new 'move' object
+// Allocate a new 'move'
 struct move *
 move_alloc(void)
 {
@@ -88,7 +88,7 @@ move_get_coord(struct move *m, double move_time)
 
 #define NEVER_TIME 9999999999999999.9
 
-// Allocate a new 'trapq' object
+// Allocate a new 'trapq'
 struct trapq * __visible
 trapq_alloc(void)
 {
@@ -102,7 +102,7 @@ trapq_alloc(void)
     return tq;
 }
 
-// Free memory associated with a 'trapq' object
+// Free memory associated with a 'trapq'
 void __visible
 trapq_free(struct trapq *tq)
 {

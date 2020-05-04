@@ -10,10 +10,11 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging, re, collections, os, threading
-from messaging import msg
-from messaging import Kerr as error
-import part, composite, console
+import logging, re, collections, os, sys, threading
+from text import msg
+from error import KError as error
+import tree, console
+logger = logging.getLogger(__name__)
 
 class sentinel:
     pass
@@ -152,16 +153,16 @@ class CommandApi:
                     continue
             command = " ".join(parts[:i]).strip()
             arg = " ".join(parts[i:]).strip()
-            print "COMMAND ("+command+") ARG ("+arg+")"
+            print("COMMAND ("+command+") ARG ("+arg+")")
             if len(parts[i:]) == 0:
                 if "_obj_" in leaf:
                     for o in leaf["_obj_"]:
                         if "name" not in o:
                             #print "HANDLER: %s" % o
                             return o["handler"](None)
-                    print "Command error: %s" % command
+                    print("Command error: %s" % command)
                 else:
-                    print "Command incomplete: %s" % command
+                    print("Command incomplete: %s" % command)
             else:
                 if "_obj_" in leaf:
                     for o in leaf["_obj_"]:
@@ -169,23 +170,19 @@ class CommandApi:
                             if o["name"] == arg:
                                 #print "HANDLER: %s, ARG: %s" % (o,arg)
                                 return o["handler"](arg)
-                    print "Wrong command args '%s'" % arg
+                    print("Wrong command args '%s'" % arg)
                 else:
-                    print "Command incomplete: %s" % command
-    def show(self, root = None, indent = 1):
+                    print("Command incomplete: %s" % command)
+    def show(self, root = None, indent = 1, plus = ""):
         "show the command's path"
         if root == None: root = self.root
-        for c in root:
-            if c == "_obj_":
-                print c+" "+str(root[c])
-                pass
-            else:
-                print str(" "*indent) + c
-                self.show(root[c], indent+1)
+        txt = ""
+
+        return txt
 
 # test functions, can be removed
 def testcmd(arg=None):
-    print "RECEIVED ARG: '%s'" % str(arg)
+    print("RECEIVED ARG: '%s'" % str(arg))
 def mktestcmd():
     cmd = CommandApi()
     cmd.add("JUSTIFIED_OPTION", testcmd, None, ready=False, desc="JUSTIFIED_OPTION")
@@ -212,28 +209,37 @@ def mktestcmd():
     return cmd
 
 # commander, base class
-class Object(part.Object):
+class Object(tree.Part):
     respond_types = { 'echo': 'echo:', 'command': '//', 'error' : '!!'}
     extended_r = re.compile(
         r'^\s*(?:N[0-9]+\s*)?'
         r'(?P<cmd>[a-zA-Z_][a-zA-Z0-9_]+)(?:\s+|$)'
         r'(?P<args>[^#*;]*?)'
         r'\s*(?:[#*;].*)?$')
-    def __init__(self, hal, node):
-        part.Object.__init__(self,hal,node)
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.metaconf["default_type"] = {"t": "choice", "choices": self.respond_types, "default": "echo"}
         self.metaconf["default_prefix"] = {"t": "str", "default": "self._default_type"}
         #
-        self.printer = self.hal.get_printer()
-        self.mutex = self.hal.get_reactor().mutex()
-        # input handling
-        self.input_log = collections.deque([], 50)
         # command handling
-        self.command_handler = {}
-        self.command_help = {}
-        self.ready_only = {}
-        self.command = {}
-        self.cmdroot = CommandApi()
+        self.command = CommandApi()
+    def _show_details(self, indent = 0):
+        "Return formatted details about commander node."
+        txt = "\t"*(indent+2) + "------------------- (commands)\n"
+        #for cmd in sorted(self.command.root.keys()):
+        #    txt = txt + str('\t' * (indent+2) + "- " + str(cmd).ljust(20, " ")) 
+        #    if cmd in self.ready_only:
+        #        txt = txt + " (ready only)"
+        #    txt = txt + "\n"
+        #for cmder in self.commander:
+        #    txt = txt + str('\t' * (indent+1) + "- " + str(cmder).ljust(20, " ")+"\n")
+        #    txt = txt + "\t"*(indent+2) + "------------------- (commands)\n"
+        #    for cmd in sorted(self.commander[cmder].command.root.keys()):
+        #        txt = txt + str('\t' * (indent+2) + "- " + str(cmd).ljust(20, " ")) 
+        #        if cmd in self.commander[cmder].ready_only:
+        #            txt = txt + " (ready only)"
+        #        txt = txt + "\n"
+        return txt
     # command and params, parsing and manipulation
     def _is_traditional_gcode(self, cmd):
         # A "traditional" g-code command is a letter and followed by a number
@@ -291,22 +297,10 @@ class Object(part.Object):
             if m.endswith("_ready_only"):
                 ro = True
                 name = name.replace("_ready_only", "")
-            cmdr.cmdroot.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
+            cmdr.command.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
             for a in getattr(obj, m + '_aliases', []):
                 name = a.replace("_cmd__", " ").lower().strip()
-                cmdr.cmdroot.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
-    # scripts support
-    def get_mutex(self):
-        return self.mutex
-    def run_script_from_command(self, script):
-        prev_need_ack = self.need_ack
-        try:
-            self._process_commands(script.split('\n'), need_ack=False)
-        finally:
-            self.need_ack = prev_need_ack
-    def run_script(self, script):
-        with self.mutex:
-            self._process_commands(script.split('\n'), need_ack=False)
+                cmdr.command.add(name, getattr(obj, m), ident, ro, getattr(obj, m).__doc__)
     #
     def cleanup(self):
         pass
@@ -318,9 +312,13 @@ class Object(part.Object):
         pass
     def _cmd__ECHO(self, params):
         'Echo a command.'
+        print("TODO")
+        return
         self.respond_info(params['#original'], log=False)
     def _cmd__UNKNOWN(self, params):
         'Echo an unknown command.'
+        print("TODO")
+        return
         self.respond_info(params['#original'], log=False)
 
 # commander, commands receiver and dispatcher
@@ -328,16 +326,13 @@ class Dispatch(Object):
     RETRY_TIME = 0.100
     args_r = re.compile('([A-Z_]+|[A-Z*/])')
     m112_r = re.compile('^(?:[nN][0-9]+)?\s*[mM]112(?:\s|$)')
-    def __init__(self, hal, node):
-        Object.__init__(self, hal, node)
-        #
-        self.fd = self.printer.input_fd
+    def __init__(self, name, hal):
+        Object.__init__(self, name, hal)
         # input handling
+        self.fd = self.hal.get_printer().args.input_fd
+        self.input_log = collections.deque([], 50)
         self.is_processing_data = False
-        self.is_fileinput = not not self.printer.get_args().get("input_debug")
-        self.fd_handle = None
-        if not self.is_fileinput:
-            self.fd_handle = self.hal.get_reactor().register_fd(self.fd, self._process_data)
+        self.is_fileinput = not not self.hal.get_printer().args.input_debug
         self.partial_input = ""
         self.pending_commands = []
         self.bytes_read = 0
@@ -351,7 +346,7 @@ class Dispatch(Object):
         self.console.cmdloop()
     #
     def register(self):
-        # special register_commands
+        # register global commands
         for m in sorted([method_name for method_name in dir(self) if method_name.startswith("_cmd__") and not method_name.endswith("_aliases")]):
             name = m.replace("_cmd__", "").lower().strip()
             ro = False
@@ -361,26 +356,27 @@ class Dispatch(Object):
             pcmd = ["show_part", "show_part_full"]
             ccmd = ["show_composite", "show_composite_full"]
             for n in self.hal.node("printer").children_deep(list()):
-                if name in ccmd and self.hal.is_composite(n.object):
-                    self.cmdroot.add(name, getattr(self, m), n.name, ro, getattr(self, m).__doc__)
-                elif name in pcmd and self.hal.is_part(n.object) and not self.hal.is_composite(n.object):
-                    self.cmdroot.add(name, getattr(self, m), n.name, ro, getattr(self, m).__doc__)
+                if name in ccmd and self.hal.is_composite(n):
+                    self.command.add(name, getattr(self, m), n.name, ro, getattr(self, m).__doc__)
+                elif name in pcmd and self.hal.is_part(n) and not self.hal.is_composite(n):
+                    self.command.add(name, getattr(self, m), n.name, ro, getattr(self, m).__doc__)
             if name not in pcmd and name not in ccmd:
-                self.cmdroot.add(name, getattr(self, m), self.name, ro, getattr(self, m).__doc__)
+                self.command.add(name, getattr(self, m), self.name, ro, getattr(self, m).__doc__)
                 for a in getattr(self, m + '_aliases', []):
                     name = a.replace("_cmd__", " ").lower().strip()
-                    self.cmdroot.add(name, getattr(self, m), self.name, ro, getattr(self, m).__doc__)
+                    self.command.add(name, getattr(self, m), self.name, ro, getattr(self, m).__doc__)
+        print(self.command.show())
         #
-        self.printer.event_register_handler("klippy:ready", self._event_handle_ready)
-        self.printer.event_register_handler("klippy:shutdown", self._event_handle_shutdown)
-        self.printer.event_register_handler("klippy:disconnect", self._event_handle_disconnect)
+        self.hal.get_printer().event_register_handler("klippy:ready", self._event_handle_ready)
+        self.hal.get_printer().event_register_handler("klippy:shutdown", self._event_handle_shutdown)
+        self.hal.get_printer().event_register_handler("klippy:disconnect", self._event_handle_disconnect)
         # spawn a thread to run printer's interactive console
         self.start_args = self.hal.get_printer().get_args()
         if 'console' in self.start_args:
-            self.console = console.DispatchShell(self.hal, self.node(), self.cmdroot, self.start_args['console'])
+            self.console = console.DispatchShell(self.hal, self.node(), self.command, self.start_args['console'])
             self._console_th = threading.Thread(name="console", target=self._console_run)
             self._console_th.start()
-            logging.debug("- Klippy command console started.")
+            logger.debug("- Klippy command console started.")
     #
     # event handlers
     def _event_handle_ready(self):
@@ -397,7 +393,7 @@ class Dispatch(Object):
             out.append("\tRead %f: %s\n" % (eventtime, repr(data)))
         for c in self.commander:
             out.append(self.commander[c]._dump_debug())
-        logging.info("\n".join(out))
+        logger.info("\n".join(out))
     def _event_handle_disconnect(self):
         self._respond_state("Disconnect")
     def _event_handle_shutdown(self):
@@ -409,7 +405,11 @@ class Dispatch(Object):
             self.printer.shutdown('error')
         # respond
         self._respond_state("Shutdown")
+    #
     # (un)register a child commander
+    def mk_gcode_id(self):
+        self.tool = self.tool + 1
+        return (self.tool-1)
     def register_commander(self, name, commander):
         if commander == None:
             self.commander.pop(name)
@@ -417,9 +417,6 @@ class Dispatch(Object):
         commander.respond_info = self.respond_info
         commander.respond_error = self.respond_error
         self.commander[name] = commander
-    def mk_gcode_id(self):
-        self.tool = self.tool + 1
-        return (self.tool-1)
     # request restart
     def request_restart(self, result):
         if self.is_printer_ready:
@@ -428,6 +425,16 @@ class Dispatch(Object):
             self.toolhead.dwell(0.500)
             self.toolhead.wait_moves()
         self.printer.shutdown(result)
+    #
+    # input and commands processing
+    def run_script_from_command(self, script):
+        prev_need_ack = self.need_ack
+        try:
+            self._process_commands(script.split('\n'), need_ack=False)
+        finally:
+            self.need_ack = prev_need_ack
+    def run_script(self, script):
+        self._process_commands(script.split('\n'), need_ack=False)
     # Parse input into commands
     def _process_commands(self, commands, need_ack=True):
         for line in commands:
@@ -474,7 +481,7 @@ class Dispatch(Object):
                     raise
             except:
                 msg = 'Internal error on command:"%s"' % (cmd,)
-                logging.exception(msg)
+                logger.exception(msg)
                 self.printer.call_shutdown(msg)
                 self.respond_error(msg)
                 if not need_ack:
@@ -486,7 +493,7 @@ class Dispatch(Object):
         try:
             data = os.read(self.fd, 4096)
         except os.error:
-            logging.exception("Read g-code")
+            logger.exception("Read g-code")
             return
         self.input_log.append((eventtime, data))
         self.bytes_read += len(data)
@@ -519,12 +526,12 @@ class Dispatch(Object):
         self.is_processing_data = True
         while pending_commands:
             self.pending_commands = []
-            with self.mutex:
-                self._process_commands(pending_commands)
+            self._process_commands(pending_commands)
             pending_commands = self.pending_commands
         self.is_processing_data = False
         if self.fd_handle is None:
             self.fd_handle = self.hal.get_reactor().register_fd(self.fd, self._process_data)
+    #
     # response handling
     def ack(self, msg=None):
         if not self.need_ack or self.is_fileinput:
@@ -535,7 +542,7 @@ class Dispatch(Object):
             else:
                 os.write(self.fd, "ok\n")
         except os.error:
-            logging.exception("Write g-code ack")
+            logger.exception("Write g-code ack")
         self.need_ack = False
     def respond(self, msg):
         if self.is_fileinput:
@@ -543,18 +550,18 @@ class Dispatch(Object):
         try:
             os.write(self.fd, msg+"\n")
         except os.error:
-            logging.exception("Write g-code response")
+            logger.exception("Write g-code response")
     def respond_info(self, msg, log=True):
         if log:
-            logging.info(msg)
+            logger.info(msg)
         if 'console' in self.start_args:
-            print msg+"\n"
+            print(msg+"\n")
         lines = [l.strip() for l in msg.strip().split('\n')]
         self.respond("// " + "\n// ".join(lines))
     def respond_error(self, msg):
-        logging.warning(msg)
+        logger.warning(msg)
         if 'console' in self.start_args:
-            print msg+"\n"
+            print(msg+"\n")
         lines = msg.strip().split('\n')
         if len(lines) > 1:
             self.respond_info("\n".join(lines), log=False)
@@ -575,7 +582,7 @@ class Dispatch(Object):
             return
         cmd = params.get('#command')
         if not cmd:
-            logging.debug(params['#original'])
+            logger.debug(params['#original'])
             return
         if cmd.startswith("M116 "):
             # Handle M116 gcode with numeric and special characters
@@ -593,6 +600,8 @@ class Dispatch(Object):
         self.respond_info('Unknown command:"%s"' % (cmd,))
     def _cmd__HELP(self, params):
         'Help.'
+        print("TODO")
+        return
         cmdhelp = []
         if not self.is_printer_ready:
             cmdhelp.append("Printer is not ready - not all commands available.")
@@ -603,6 +612,8 @@ class Dispatch(Object):
         self.respond_info("\n".join(cmdhelp), log=False)
     def _cmd__RESPOND(self, params):
         'Send a message to the host.'
+        print("TODO")
+        return
         respond_type = self.gcode.get_str('TYPE', params, None)
         prefix = self.default_prefix
         if(respond_type != None):
@@ -616,16 +627,20 @@ class Dispatch(Object):
         self.gcode.respond("%s %s" %(prefix, msg))
     def _cmd__RESTART(self, params):
         'Reload config file and restart host software.'
+        print("TODO")
+        return
         self.request_restart('restart')
     def _cmd__RESTART_FIRMWARE(self, params):
         'Restart firmware, host, and reload config.'
+        print("TODO")
+        return
         self.request_restart('restart_mcu')
     def _cmd__SHOW_PART(self, params):
         'Shows information about a printer part.'
         self.hal.get_commander().respond_info(self.node().show(plus="attrs"), log=False)
     def _cmd__SHOW_PART_FULL(self, params):
         'Shows information about a printer part. Full details.'
-        self.hal.get_commander().respond_info(self.node().show(plus="module,object,attrs,details"), log=False)
+        self.hal.get_commander().respond_info(self.node().show(plus="module,attrs,details"), log=False)
     def _cmd__SHOW_COMPOSITE(self, params):
         'Shows information about one tree branch.'
         nodename = "???"
@@ -633,7 +648,7 @@ class Dispatch(Object):
     def _cmd__SHOW_COMPOSITE_FULL(self, params):
         'Shows information about one tree branch. Full details.'
         nodename = "???"
-        self.hal.get_commander().respond_info(self.node().show(plus="module,object,attrs,details,deep"), log=False)
+        self.hal.get_commander().respond_info(self.node().show(plus="module,attrs,details,deep"), log=False)
     def _cmd__SHOW_STATUS(self, params):
         'Report the printer status.'
         if self.is_printer_ready:
@@ -647,8 +662,8 @@ class Dispatch(Object):
 # gcode child commander, to use in conjunction with toolheads
 class Gcode(Object):
     #self.metaconf["resolution"] = {"t":"float", "default":1., "above":0.}
-    def __init__(self, hal, node):
-        Object.__init__(self, hal, node)
+    def __init__(self, name, hal):
+        Object.__init__(self, name, hal)
         # G-Code coordinate manipulation
         self.absolute_coord = self.absolute_extrude = True
         self.base_position = [0.0, 0.0, 0.0, 0.0]
@@ -690,8 +705,8 @@ class Gcode(Object):
         self.base_position[3] = self.last_position[3]
     # process command's params
     def process_command(self, params):
-        logging.warning("TOOLHEAD '%s': TODO process Gcode command params:", self.name)
-        logging.warning("       %s", params)
+        logger.warning("TOOLHEAD '%s': TODO process Gcode command params:", self.name)
+        logger.warning("       %s", params)
         return params
     # ???
     def stats(self, eventtime):
@@ -779,6 +794,8 @@ class Gcode(Object):
     _cmd__G1_aliases = ['G0'] # G0 Rapid move
     def _cmd__G1(self, params):
         'Linear move'
+        print("TODO")
+        return
         try:
             for axis in 'XYZ':
                 if axis in params:
@@ -883,6 +900,8 @@ class Gcode(Object):
     _cmd__G2_aliases = ['G3'] # G3 "Clockwise rotaion move"
     def _cmd__G2(self, params):
         'Counterclockwise rotation move'
+        print("TODO")
+        return
         # set vars
         currentPos =  self.get_status(None)['gcode_position']
         #
@@ -929,13 +948,19 @@ class Gcode(Object):
                 self.respond_info("could not tranlate from '" + params['#original'] + "'")
     def _cmd__G4(self, params):
         'Dwell'
+        print("TODO")
+        return
         delay = self.get_float('P', params, 0., minval=0.) / 1000.
         self.toolhead.dwell(delay)
     def _cmd__G20(self, params):
-        ''
+        'Set units to inches.'
+        print("TODO")
+        return
         self.respond_error('Machine does not support G20 (inches) command')    
     def _cmd__G28(self, params):
         'Move to origin (home)'
+        print("TODO")
+        return
         axes = []
         for axis in 'XYZ':
             if axis in params:
@@ -951,12 +976,18 @@ class Gcode(Object):
         self.reset_last_position()
     def _cmd__G90(self, params):
         'Set to absolute positioning'
+        print("TODO")
+        return
         self.absolute_coord = True
     def _cmd__G91(self, params):
         'Set to relative positioning'
+        print("TODO")
+        return
         self.absolute_coord = False
     def _cmd__G92(self, params):
-        ''
+        'Set position.'
+        print("TODO")
+        return
         offsets = { p: self.get_float(a, params)
                     for a, p in self.axis2pos.items() if a in params }
         for p, offset in offsets.items():
@@ -969,37 +1000,47 @@ class Gcode(Object):
     _cmd__M18_aliases = ['M84'] # M84 "Disable idle hold"
     def _cmd__M18(self, params):
         'Disable all stepper motors'
+        print("TODO")
+        return
         # Turn off motors
         # TODO params
         self.hal.get_controller().cmd_STEPPER_GROUP_SWITCH(params)
     def _cmd__M82(self, params):
         'Set extruder to absolute mode'
+        print("TODO")
+        return
         self.absolute_extrude = True
     def _cmd__M83(self, params):
         'Set extruder to relative mode'
+        print("TODO")
+        return
         self.absolute_extrude = False
     def _cmd__M104_ready_only(self, params, wait=False):
         'Set extrude temperature'
-        gcode = self.printer.lookup_object('base_gcode')
+        print("TODO")
+        return
+        gcode = self.printer.lookup('base_gcode')
         temp = gcode.get_float('S', params, 0.)
         if 'T' in params:
             index = gcode.get_int('T', params, minval=0)
             section = 'extruder'
             if index:
                 section = 'extruder%d' % (index,)
-            extruder = self.printer.lookup_object(section, None)
+            extruder = self.printer.lookup(section, None)
             if extruder is None:
                 if temp <= 0.:
                     return
                 raise gcode.error("Extruder not configured")
         else:
-            extruder = self.printer.lookup_object('toolhead').get_extruder()
+            extruder = self.printer.lookup('toolhead').get_extruder()
         heater = extruder.get_heater()
         heater.set_temp(temp)
         if wait and temp:
             gcode.wait_for_temperature(heater)
     def _cmd__M105_ready_only(self, params):
         'Get extruder temperature'
+        print("TODO")
+        return
         msg = self.get_temp(self.hal.get_reactor().monotonic())
         if self.need_ack:
             self.ack(msg)
@@ -1007,21 +1048,31 @@ class Gcode(Object):
             self.respond(msg)
     def _cmd__M109_ready_only(self, params):
         'Set Extruder Temperature and Wait'
+        print("TODO")
+        return
         self.cmd_M104(params, wait=True)
     def _cmd__M112_ready_only(self, params):
         'Full (Emergency) stop'
+        print("TODO")
+        return
         self.printer.call_shutdown("Shutdown due to M112 command")
     def _cmd__M114_ready_only(self, params):
         'Get current position'
+        print("TODO")
+        return
         p = self._get_gcode_position()
         self.respond("X:%.3f Y:%.3f Z:%.3f E:%.3f" % tuple(p))
     def _cmd__M115_ready_only(self, params):
         'Get firmware version and capabilities'
+        print("TODO")
+        return
         software_version = self.printer.get_args().get('software_version')
         kw = {"FIRMWARE_NAME": "Klipper", "FIRMWARE_VERSION": software_version}
         self.ack(" ".join(["%s:%s" % (k, v) for k, v in kw.items()]))
     def _cmd__M118_ready_only(self, params):
         'Send a message to the host'
+        print("TODO")
+        return
         if '#original' in params:
             msg = params['#original']
             if not msg.startswith('M118'):
@@ -1036,9 +1087,13 @@ class Gcode(Object):
             self.gcode.respond("%s %s" %(self.default_prefix, msg))
     def _cmd__M119_ready_only(self, params):
         'Get endstop status'
+        print("TODO")
+        return
         self.hal.get_controller().cmd_SHOW_ENDSTOPS(params)
     def _cmd__M204(self, params):
         'Set default acceleration'
+        print("TODO")
+        return
         gcode = self.hal.get_gcode()
         if 'S' in params:
             # Use S for accel
@@ -1053,11 +1108,15 @@ class Gcode(Object):
         toolhead._calc_junction_deviation()
     def _cmd__M220(self, params):
         'Set speed factor override percentage'
+        print("TODO")
+        return
         value = self.get_float('S', params, 100., above=0.) / (60. * 100.)
         self.speed = self._get_gcode_speed() * value
         self.speed_factor = value
     def _cmd__M221(self, params):
         'Set extrude factor override percentage'
+        print("TODO")
+        return
         new_extrude_factor = self.get_float('S', params, 100., above=0.) / 100.
         last_e_pos = self.last_position[3]
         e_value = (last_e_pos - self.base_position[3]) / self.extrude_factor
@@ -1065,9 +1124,13 @@ class Gcode(Object):
         self.extrude_factor = new_extrude_factor
     def _cmd__M400(self, params):
         'Wait for current moves to finish'
+        print("TODO")
+        return
         self.toolhead.wait_moves()
     def _cmd__GCODE_SET_OFFSET(self, params):
         'Set a virtual offset to g-code positions'
+        print("TODO")
+        return
         move_delta = [0., 0., 0., 0.]
         for axis, pos in self.axis2pos.items():
             if axis in params:
@@ -1089,6 +1152,8 @@ class Gcode(Object):
             self.move_with_transform(self.last_position, speed)
     def _cmd__GCODE_SAVE_STATE(self, params):
         'Save G-Code coordinate state'
+        print("TODO")
+        return
         state_name = self.get_str('NAME', params, 'default')
         self.saved_states[state_name] = {
             'absolute_coord': self.absolute_coord,
@@ -1101,6 +1166,8 @@ class Gcode(Object):
         }
     def _cmd__GCODE_RESTORE_STATE(self, params):
         'Restore a previously saved G-Code state'
+        print("TODO")
+        return
         state_name = self.get_str('NAME', params, 'default')
         state = self.saved_states.get(state_name)
         if state is None:
@@ -1122,11 +1189,11 @@ class Gcode(Object):
             self.last_position[:3] = state['last_position'][:3]
             self.move_with_transform(self.last_position, speed)
 
-def load_node_object(hal, node):
-    if node.name == "commander":
-        node.object = Dispatch(hal, node)
+def load_node(name, hal, cparser = None):
+    if name == "commander":
+        return Dispatch(name, hal)
     else:
-        node.object = Gcode(hal, node)
-        hal.get_commander().register_commander("gcode "+node.id(), node.object)
-    return node.object
+        node = Gcode(name, hal)
+        hal.get_commander().register_commander("gcode "+node.id(), node)
+        return node
 

@@ -10,9 +10,9 @@
 #   seconds), _r is ratio (scalar between 0.0 and 1.0)
 
 import logging, math
-from messaging import msg
-from messaging import Kerr as error
-import composite, chelper
+from text import msg
+from error import KError as error
+import tree, chelper
 from kinematics import cartesian
 from parts import extruder
 
@@ -239,11 +239,11 @@ DRIP_TIME = 0.100
 class DripModeEndSignal(Exception):
     pass
 
-class Dummy(composite.Object):
-    def __init__(self, hal, node):
-	composite.Object.__init__(self,hal,node)
-        logging.warning("(%s) instrument.Dummy", self.name)
-    def init(self):
+class Dummy(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal)
+        logging.warning("(%s) instrument.Dummy", name)
+    def _init(self):
         if self.ready:
             return
         self.ready = True
@@ -255,9 +255,9 @@ class Dummy(composite.Object):
         pass
 
 # Main code to track events (and their timing) on the printer toolhead
-class Object(composite.Object):
-    def __init__(self, hal, node):
-	composite.Object.__init__(self,hal,node)
+class Toolhead(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         #
         self.metaconf["max_velocity"] = {"t":"float", "above":0.}
         self.metaconf["max_accel"] = {"t":"float", "above":0.}
@@ -270,7 +270,7 @@ class Object(composite.Object):
         self.metaconf["buffer_time_high"] = {"t":"float", "default":2.000, "above":"self._buffer_time_low"}
         self.metaconf["buffer_time_start"] = {"t":"float", "default":0.250, "above":0.}
         self.metaconf["move_flush_time"] = {"t":"float", "default":0.050, "above":0.}
-    def init(self):
+    def _init(self):
         if self.ready:
             return
         self.kin = self.hal.get_kinematic(self.id())
@@ -278,7 +278,7 @@ class Object(composite.Object):
         # stepper enable line tracker
         self.stepper_linetracker = StepperEnableToolhead(self.hal, self, self.gcode)
         for s in self.children_deep_bygroup("stepper"):
-            self.stepper_linetracker.register_stepper(s.name, s.object.enable)
+            self.stepper_linetracker.register_stepper(s.name, s.enable)
         self.hal.get_controller().stepper_linetracker.register_tracker(self.name, self.stepper_linetracker)
         #
         self.all_mcus = self.hal.get_controller().mcu_list()
@@ -300,7 +300,7 @@ class Object(composite.Object):
         self.print_time = 0.
         self.special_queuing_state = "Flushed"
         self.need_check_stall = -1.
-        self.flush_timer = self.hal.get_reactor().register_timer(self._flush_handler)
+        self.flush_timer = self.hal.get_reactor().timer_register(self._flush_handler)
         self.move_queue.set_flush_time(self._buffer_time_high)
         self.last_print_start_time = 0.
         self.idle_flush_print_time = 0.
@@ -317,7 +317,7 @@ class Object(composite.Object):
         self.trapq_free_moves = ffi_lib.trapq_free_moves
         self.step_generators = []
         # set default tool
-        tools = [t.object for t in self.children_deep_bytype("tool", "extruder")]
+        tools = [t for t in self.children_deep_bytype("tool", "extruder")]
         if tools:
             for t in tools:
                 t.install(self)
@@ -397,7 +397,7 @@ class Object(composite.Object):
         self.move_queue.flush()
         self.special_queuing_state = "Flushed"
         self.need_check_stall = -1.
-        self.hal.get_reactor().update_timer(self.flush_timer, self.hal.get_reactor().NEVER)
+        self.hal.get_reactor().timer_update(self.flush_timer, self.hal.get_reactor().NEVER)
         self.move_queue.set_flush_time(self._buffer_time_high)
         self.idle_flush_print_time = 0.
         flush_time = self.last_kin_move_time + self.kin_flush_delay
@@ -657,12 +657,12 @@ class Object(composite.Object):
         self.stepper_linetracker.debug_switch(stepper_name, stepper_enable)
 
 ATTRS = ("x", "y", "z", "max_velocity", "max_accel", "max_z_velocity", "max_z_accel")
-def load_node_object(hal, node):
-    if node.attrs_check():
-        node.object = Object(hal, node)
-    else:
-        node.object = Dummy(hal, node)
-        # force dummy kinematic too
-        knode = node.parent(hal.tree.printer, node.name)
-        knode.object = cartesian.Dummy(hal, knode)
-    return node.object
+def load_node(name, hal, cparser):
+    #if node.attrs_check():
+    node = Toolhead(name, hal)
+    #else:
+    #    node = Dummy(hal, node)
+    #    # force dummy kinematic too
+    #    knode = node.parent(hal.tree.printer, node.name)
+    #    knode = cartesian.Dummy(hal, knode)
+    return node

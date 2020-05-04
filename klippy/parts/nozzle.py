@@ -4,31 +4,26 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import part
-
+import tree
 
 # TODO 
-class Dummy(part.Object):
-    def __init__(self, hal, node):
-        part.Object.__init__(self, hal, node)
-        logging.warning("(%s) nozzle.Dummy", node.name)
-    def configure():
+class Dummy(tree.Part):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
+        logger.warning("(%s) nozzle.Dummy", name)
+    def _configure():
         if self.ready:
             return
         self.ready = True
 
-class Object(part.Object):
-    def __init__(self, hal, node):
-        part.Object.__init__(self, hal, node)
+class Object(tree.Part):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.metaconf["diameter"] = {"t":"float", "above":0.}
-    def configure(self):
+    def _configure(self):
         self.ready = True
 
 ATTRS = ("diameter",)
-def load_node_object(hal, node):
-    if node.attrs_check():
-        node.object = Object(hal, node)
-    else:
-        node.object = Dummy(hal,node)
-    return node.object
+def load_node(name, hal, cparser):
+    return Object(name, hal)
 

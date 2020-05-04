@@ -5,9 +5,10 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging, os, sys, cmd, re, time
-from messaging import msg
-from messaging import Kerr as error
-import util, msgproto, commander
+from text import msg
+from error import KError as error
+import util, commander
+logger = logging.getLogger(__name__)
 
 # commander's shell, base class
 class ObjectShell(cmd.Cmd):
@@ -74,7 +75,7 @@ class DispatchShell(ObjectShell):
     def help_README(self):
         help_txt = """
             This is the main Klippy console. Exiting this console closes gracefully the whole Klippy app.
-            The console features "tab completion": tapping TAB will complete the current word, double TAB will give you hints.
+            The console features "tab completion": tapping TAB will give you hints.
             Some commands make you enter sub-consoles, each with its own set of commands. Example: "toolhead" and "mcu".
             There is also a subset of OS shell commands (ex: ls, cd, cat), just prepend the OS shell command with "!" or "shell",
             Example: "! ls"
@@ -128,17 +129,17 @@ class DispatchShell(ObjectShell):
         'Toolhead sub-console. To exit just type "exit" and you will be back to main Klippy console.'
         node = self.hal.node("gcode "+arg)
         if node != None:
-            sh = GcodeShell(self.hal, node, node.object.cmdroot)
+            sh = GcodeShell(self.hal, node, node.cmdroot)
             sh.prompt = "Klippy:toolhead "+node.id()+" > "
             sh.cmdloop(intro=None)
         else:
             self.output("Toolhead '%s' doesn't exist." % arg)
     def complete_toolhead(self, text, line, begidx, endidx):
-        return [i.split(" ")[1] for i in self.node.object.commander if i.split(" ")[1].startswith(text)]
+        return [i.split(" ")[1] for i in self.node.commander if i.split(" ")[1].startswith(text)]
     def do_restart(self, arg):
         'Restart Klippy without config reload.'
         self.can_exit = True
-        logging.warning("TODO currently 'restart' isn't supported, backups to 'reload'")
+        logger.warning("TODO currently 'restart' isn't supported, backups to 'reload'")
         self.hal.get_printer().shutdown('reconf')
         return True
     def do_reload(self, arg):
@@ -169,8 +170,8 @@ class MCUShell(ObjectShell):
     def __init__(self, hal, node, cmdroot):
         ObjectShell.__init__(self, hal, node, cmdroot)
         self.name = node.id()
-        self.pins = node.object.pins
-        self.mcu = node.object.mcu
+        self.pins = node.pins
+        self.mcu = node.mcu
         self.intro = "\n * MCU '%s' command console. Type 'help' or '?' to list currently available commands.\n" % self.name
         #
         self.clocksync = self.hal.get_timing()
@@ -278,7 +279,7 @@ the following builtin variables may be used in expressions:
             return
         try:
             self.ser.send(msg)
-        except msgproto.error as e:
+        except error as e:
             self.output("Error: %s" % (str(e),))
     def do_connect(self, arg):
         'Issue this command to collect information about the mcu and grab serial handlers.'
@@ -309,7 +310,7 @@ the following builtin variables may be used in expressions:
             return
         try:
             self.ser.send(' '.join(parts[1:]), minclock=val)
-        except msgproto.error as e:
+        except error as e:
             self.output("Error: %s" % (str(e),))
             return
     def do_flood(self, arg):
@@ -331,7 +332,7 @@ the following builtin variables may be used in expressions:
                 next_clock = msg_clock + delay_clock
                 self.ser.send(msg, minclock=msg_clock, reqclock=next_clock)
                 msg_clock = next_clock
-        except msgproto.error as e:
+        except error as e:
             self.output("Error: %s" % (str(e),))
             return
     def do_suppress(self, arg):

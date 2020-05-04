@@ -4,21 +4,21 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import threading, logging, serial
+import logging, multiprocessing, threading, serial
+from text import msg
+from error import KError as error
 import msgproto, chelper, util
-
-class error(Exception):
-    pass
+logger = logging.getLogger(__name__)
 
 class SerialReader:
     BITS_PER_BYTE = 10.
     def __init__(self, hal, serialport, baud, rts = True):
         self.hal = hal
+        # Serial port
         self.serialport = serialport
         self.baud = baud
-        # Serial port
-        self.ser = None
         self.rts = rts
+        self.ser = None
         self.msgparser = msgproto.MessageParser()
         # C interface
         self.ffi_main, self.ffi_lib = chelper.get_ffi()
@@ -43,8 +43,7 @@ class SerialReader:
             if count < 0:
                 break
             if response.notify_id:
-                params = {'#sent_time': response.sent_time,
-                          '#receive_time': response.receive_time}
+                params = {'#sent_time': response.sent_time, '#receive_time': response.receive_time}
                 completion = self.pending_notifications.pop(response.notify_id)
                 self.hal.get_reactor().async_complete(completion, params)
                 continue
@@ -57,7 +56,7 @@ class SerialReader:
                     hdl = self.handlers.get(hdl, self.handle_default)
                     hdl(params)
             except:
-                logging.exception("Exception in serial callback")
+                logger.exception("Exception in serial callback")
     def _get_identify_data(self, eventtime):
         # Query the "data dictionary" from the micro-controller
         identify_data = ""
@@ -66,7 +65,7 @@ class SerialReader:
             try:
                 params = self.send_with_response(msg, 'identify_response')
             except error as e:
-                logging.exception("Wait for identify_response")
+                logger.exception("Wait for identify_response")
                 return None
             if params['offset'] == len(identify_data):
                 msgdata = params['data']
@@ -76,7 +75,7 @@ class SerialReader:
                 identify_data += msgdata
     def connect(self):
         # Initial connection
-        logging.debug("- Starting serial connect to '%s' at '%s' baud.", self.serialport, self.baud)
+        logger.debug("- Starting serial connect to '%s' at '%s' baud.", self.serialport, self.baud)
         start_time = self.hal.get_reactor().monotonic()
         while 1:
             connect_time = self.hal.get_reactor().monotonic()
@@ -91,20 +90,23 @@ class SerialReader:
                 else:
                     self.ser = open(self.serialport, 'rb+')
             except (OSError, IOError, serial.SerialException) as e:
-                logging.warn("Unable to open port: %s", e)
+                logger.warn("Unable to open port: %s", e)
                 self.hal.get_reactor().pause(connect_time + 5.)
                 continue
             if self.baud:
                 stk500v2_leave(self.ser, self.hal.get_reactor())
             self.serialqueue = self.ffi_lib.serialqueue_alloc(self.ser.fileno(), 0)
-            self.background_thread = threading.Thread(target=self._bg_thread)
+            print(self.serialqueue)
+            self.background_thread = threading.Thread(name='polling:mcu at '+self.serialport, target=self._bg_thread)
             self.background_thread.start()
             # Obtain and load the data dictionary from the firmware
-            completion = self.hal.get_reactor().register_callback(self._get_identify_data)
+            completion = self.hal.get_reactor().callback_async(self._get_identify_data)
+            print("BEFORE %s" % multiprocessing.current_process())
             identify_data = completion.wait(connect_time + 5.)
+            print("AFTER")
             if identify_data is not None:
                 break
-            logging.info("Timeout on serial connect")
+            logger.info("Timeout on serial connect")
             self.disconnect()
         msgparser = msgproto.MessageParser()
         msgparser.process_identify(identify_data)
@@ -114,8 +116,7 @@ class SerialReader:
         mcu_baud = msgparser.get_constant_float('SERIAL_BAUD', None)
         if mcu_baud is not None:
             baud_adjust = self.BITS_PER_BYTE / mcu_baud
-            self.ffi_lib.serialqueue_set_baud_adjust(
-                self.serialqueue, baud_adjust)
+            self.ffi_lib.serialqueue_set_baud_adjust(self.serialqueue, baud_adjust)
         receive_window = msgparser.get_constant_int('RECEIVE_WINDOW', None)
         if receive_window is not None:
             self.ffi_lib.serialqueue_set_receive_window(self.serialqueue, receive_window)
@@ -177,8 +178,7 @@ class SerialReader:
         src = SerialRetryCommand(self, response)
         return src.get_response(cmd, self.default_cmd_queue)
     def alloc_command_queue(self):
-        return self.ffi_main.gc(self.ffi_lib.serialqueue_alloc_commandqueue(),
-                                self.ffi_lib.serialqueue_free_commandqueue)
+        return self.ffi_main.gc(self.ffi_lib.serialqueue_alloc_commandqueue(), self.ffi_lib.serialqueue_free_commandqueue)
     # Dumping debug lists
     def dump_debug(self):
         out = []
@@ -202,13 +202,13 @@ class SerialReader:
         return '\n'.join(out)
     # Default message handlers
     def _serial_handle_unknown_init(self, params):
-        logging.debug("Unknown message %d (len %d) while identifying", params['#msgid'], len(params['#msg']))
+        logger.debug("Unknown message %d (len %d) while identifying", params['#msgid'], len(params['#msg']))
     def _serial_handle_unknown(self, params):
-        logging.warn("Unknown message type %d: %s", params['#msgid'], repr(params['#msg']))
+        logger.warn("Unknown message type %d: %s", params['#msgid'], repr(params['#msg']))
     def _serial_handle_output(self, params):
-        logging.info("%s: %s", params['#name'], params['#msg'])
+        logger.info("%s: %s", params['#name'], params['#msg'])
     def handle_default(self, params):
-        logging.warn("got %s", params)
+        logger.warn("got %s", params)
     def __del__(self):
         self.disconnect()
 
@@ -241,7 +241,7 @@ class SerialRetryCommand:
 
 # Attempt to place an AVR stk500v2 style programmer into normal mode
 def stk500v2_leave(ser, reactor):
-    logging.debug("Starting stk500v2 leave programmer sequence")
+    logger.debug("Starting stk500v2 leave programmer sequence")
     util.clear_hupcl(ser.fileno())
     origbaud = ser.baudrate
     # Request a dummy speed first as this seems to help reset the port
@@ -251,10 +251,10 @@ def stk500v2_leave(ser, reactor):
     ser.baudrate = 115200
     reactor.pause(reactor.monotonic() + 0.100)
     ser.read(4096)
-    ser.write('\x1b\x01\x00\x01\x0e\x11\x04')
+    ser.write('\x1b\x01\x00\x01\x0e\x11\x04'.encode())
     reactor.pause(reactor.monotonic() + 0.050)
     res = ser.read(4096)
-    logging.debug("Got %s from stk500v2", repr(res))
+    logger.debug("Got %s from stk500v2", repr(res))
     ser.baudrate = origbaud
 
 def cheetah_reset(serialport, reactor):

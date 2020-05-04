@@ -1,10 +1,11 @@
 # Klippy text messages.
 # 
-# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
+logger = logging.getLogger(__name__)
 
 # code to message name
 MESSAGE = {
@@ -63,17 +64,49 @@ MESSAGE_DESC = {
         "Command request.": "This generally occurs in response to an M112 G-Code command or in response to an internal error in the host software.",
 }
 
+# helper to translate codes and shortys into descriptions
+def msg(*args):
+    string = None
+    if len(args) > 0:
+        if len(args) == 1:
+            # single int
+            if isinstance(args[0], int):
+                # int is a message code = print description
+                if args[0] in MESSAGE:
+                    string = MESSAGE_DESC[MESSAGE[args[0]]]
+                # else print int
+                else:
+                    string = args[0]
+            # single string
+            elif isinstance(args[0], str):
+                # string have a description = print description
+                if args[0] in MESSAGE_DESC:
+                    string = MESSAGE_DESC[args[0]]
+                # else print string
+                else:
+                    string = args[0]
+        else:
+            # first is the message id, then all parameters
+            if isinstance(args[0], int):
+                string = MESSAGE_DESC[MESSAGE[args.pop(0)]]
+                string = string % tuple(args)
+            else:
+                string = MESSAGE_DESC[args.pop(0)]
+                string = string % tuple(args)
+    return string
+
 # developer maintenance utility: prints out all codes without descriptions
 def no_desc_list():
-    logging.info("Codes without description: ")
+    logger.info("Codes without description: ")
     for c in MESSAGE:
         if MESSAGE[c] not in MESSAGE_DESC:
-            logging.info("  * (%s) %s", c, MESSAGE[c])
+            logger.info("  * (%s) %s", c, MESSAGE[c])
 
 # developer maintenance utility: prints out all orphaned descriptions
 def no_short_list():
-    logging.info("Orphaned descriptions: ")
+    logger.info("Orphaned descriptions: ")
     for k in MESSAGE_DESC.keys():
         if k not in MESSAGE.values():
-            logging.info("  * %s - %s", k, MESSAGE_DESC[k])
+            logger.info("  * %s - %s", k, MESSAGE_DESC[k])
+
 

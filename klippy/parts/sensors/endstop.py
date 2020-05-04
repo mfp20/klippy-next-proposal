@@ -1,4 +1,4 @@
-# Sensors support classes.
+# Endstop sensor support.
 # 
 # Copyright (C) 2016-2020  Kevin O'Connor <kevin@koconnor.net>
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
@@ -6,8 +6,11 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
-import controller
+from text import msg
+from error import KError as error
+import tree
 from parts import sensor
+logger = logging.getLogger(__name__)
 
 # Interface to low-level mcu and chelper code
 class MCU_endstop:
@@ -57,7 +60,7 @@ class MCU_endstop:
         self._home_completion = self._reactor.register_callback(self._home_retry)
         return self._trigger_completion
     def _handle_endstop_state(self, params):
-        logging.debug("endstop_state %s", params)
+        logger.debug("endstop_state %s", params)
         if params['#sent_time'] >= self._min_query_time:
             if params['homing']:
                 self._last_sent_time = params['#sent_time']
@@ -106,21 +109,21 @@ class MCU_endstop:
 
 # TODO 
 class Dummy(sensor.Object):
-    def __init__(self, hal, node):
-        sensor.Object.__init__(self, hal, node)
-        logging.warning("(%s) endstop.Dummy", self.name)
-    def configure():
+    def __init__(self, name, hal):
+        super().__init__(self, name, hal)
+        logger.warning("(%s) endstop.Dummy", self.name())
+    def _configure():
         if self.ready:
             return
         self.sensor = None
         self.ready = True
 
-class Object(sensor.Object):
-    def __init__(self, hal, node):
-        sensor.Object.__init__(self, hal, node)
+class Sensor(sensor.Object):
+    def __init__(self, name, hal):
+        super().__init__(name, hal)
         self.metaconf["type"] = {"t":"str", "default":"endstop"}
         self.metaconf["pin"] = {"t":"str"}
-    def configure(self):
+    def _configure(self):
         if self.ready:
             return
         # create probe
@@ -128,7 +131,7 @@ class Object(sensor.Object):
         # register pin
         self.pin[self._pin] = self.probe
         # register part
-        self.hal.get_controller().register_part(self.node())
+        self.hal.get_controller().register_part(self)
         #
         self.ready = True
     def read(self):
@@ -136,10 +139,9 @@ class Object(sensor.Object):
         return self.value
 
 ATTRS = ("type", "pin")
-def load_node_object(hal, node):
-    if node.attrs_check():
-        node.object = Object(hal, node)
-    else:
-        node.object = Dummy(hal,node)
-    return node.object
+def load_node(hal, node, cparser = None):
+    #if node.attrs_check():
+        return Sensor(hal, node)
+    #else:
+    #    node = Dummy(hal,node)
 

@@ -1,14 +1,15 @@
-# Printer composited parts.
+# Rail composite.
 #
 # Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
-# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging, collections
-from messaging import msg
-from messaging import Kerr as error
-import composite
+from text import msg
+from error import KError as error
+import tree
+logger = logging.getLogger(__name__)
 
 # rail stepper-enable line tracking
 class StepperEnableRail:
@@ -32,24 +33,24 @@ class StepperEnableRail:
             el = self.enable_line.get(stepper, "")
             if enable:
                 el.motor_enable(print_time)
-                logging.info("%s has been manually enabled", stepper)
+                logger.info("%s has been manually enabled", stepper)
             else:
                 el.motor_disable(print_time)
-                logging.info("%s has been manually disabled", stepper)
+                logger.info("%s has been manually disabled", stepper)
         else:
             self.hal.get_commander().respond_info('STEPPER_SWITCH: Invalid stepper "%s"' % (stepper))
-        logging.debug('; Max time of %f', print_time)
+        logger.debug('; Max time of %f', print_time)
     def lookup_enable(self, name):
         if name not in self.enable_line:
             raise error("Unknown stepper '%s'" % (name,))
         return self.enable_line[name]
 
 # TODO 
-class Dummy(composite.Object):
-    def __init__(self, hal, node):
-        composite.Object.__init__(self, hal, node)
-        logging.warning("(%s) rail.Dummy", self.get_name())
-    def init():
+class Dummy(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
+        logger.warning("(%s) rail.Dummy", name)
+    def _init():
         if self.ready:
             return
         self.ready = True
@@ -57,9 +58,9 @@ class Dummy(composite.Object):
         pass
 
 # A motor control "rail" with one (or more) steppers and one (or more) endstops.
-class Object(composite.Object):
-    def __init__(self, hal, node):
-        composite.Object.__init__(self, hal, node)
+class Object(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.metaconf["position_min"] = {"t":"float", "default":0.}
         self.metaconf["position_endstop_min"] = {"t":"float"}
         self.metaconf["position_max"] = {"t":"float", "above":"self._position_min"}
@@ -68,7 +69,7 @@ class Object(composite.Object):
         self.metaconf["homing_retract_speed"] = {"t":"float", "default":"self._homing_speed", "above":0.}
         self.metaconf["homing_retract_dist"] = {"t":"float", "default":5., "minval":0.}
         self.metaconf["homing_positive_dir"] = {"t":"bool", "default":False}
-    def init(self):
+    def _init(self):
         if self.ready:
             return
         self.stepper = []
@@ -79,9 +80,9 @@ class Object(composite.Object):
         # steppers
         for s in self.children_bygroup("stepper"):
             # register motor
-            self.stepper.append(s.object.actuator)
+            self.stepper.append(s.actuator)
             # register enable line
-            self.stepper_linetracker.register_stepper(s.name, s.object.enable)
+            self.stepper_linetracker.register_stepper(s.name, s.enable)
         # register this stepper tracker
         self.hal.get_controller().stepper_linetracker.register_tracker(self.name, self.stepper_linetracker)
         # endstops
@@ -90,8 +91,8 @@ class Object(composite.Object):
                 en = self.child_get_first("sensor "+self.conf[e])
                 if en:
                     for s in self.stepper:
-                        en.object.sensor.add_stepper(s)
-                    self.endstop.append((en.object.sensor, e))
+                        en.sensor.add_stepper(s)
+                    self.endstop.append((en.sensor, e))
                     #query_endstops = printer.try_load_module(config, 'query_endstops')
                     #query_endstops.register_endstop(mcu_endstop, name)
                 else:
@@ -156,7 +157,7 @@ class Object(composite.Object):
         return list(self.endstop)
     def get_endstops_status(self):
         # TODO
-        print_time = self.printer.lookup_object('toolhead').get_last_move_time()
+        print_time = self.printer.lookup('toolhead').get_last_move_time()
         last_state = [(name, mcu_endstop.query_endstop(print_time)) for mcu_endstop, name in self.endstops]
         return {'last_query': {name: value for name, value in last_state}}
     def setup_itersolve(self, alloc_func, *params):
@@ -176,11 +177,6 @@ class Object(composite.Object):
             stepper.set_position(coord)
 
 ATTRS = ("position_min", "position_max")
-def load_node_object(hal, node):
-    if node.attrs_check():
-        node.object = Object(hal, node)
-    else:
-        node.object = Dummy(hal,node)
-    return node.object
-
+def load_node(name, hal, cparser):
+    return Object(name, hal)
 

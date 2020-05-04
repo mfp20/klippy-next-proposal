@@ -1,20 +1,21 @@
-# Code for handling printer extruders.
+# Extruder composite.
 #
 # Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
-# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging, math
-from messaging import msg
-from messaging import Kerr as error
-import composite, chelper
+from text import msg
+from error import KError as error
+import tree, chelper
+logger = logging.getLogger(__name__)
 
-class Dummy(composite.Object):
-    def __init__(self, hal, node):
-        composite.Object.__init__(self, hal, node)
-        logging.warning("(%s) extruder.Dummy", node.name)
-    def init(self):
+class Dummy(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
+        logger.warning("(%s) extruder.Dummy", name)
+    def _init(self):
         if self.ready:
             return
         self.ready = True
@@ -33,9 +34,10 @@ class Dummy(composite.Object):
     def get_heater(self):
         raise homing.CommandError("Extruder not configured")
 
-class Object(composite.Object):
-    def __init__(self, hal, node):
-        composite.Object.__init__(self, hal, node)
+class Object(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
+        self.metaconf["type"] = {"t":"str"}
         self.metaconf["filament_diameter"] = {"t":"float", "minval":0.}
         self.metaconf["sharing_tool"] = {"t":"str", "default":None}
         self.metaconf["max_extrude_cross_section"] = {"t":"float", "default":None, "above":0.}
@@ -45,21 +47,21 @@ class Object(composite.Object):
         self.metaconf["instantaneous_corner_velocity"] = {"t":"float", "default":1., "minval":0.}
         self.metaconf["pressure_advance"] = {"t":"float", "default":0., "minval":0.}
         self.metaconf["pressure_advance_smooth_time"] = {"t":"float", "default":0.040, "above":0., "maxval":0.200}
-    def init(self):
+    def _init(self):
         if self.ready:
             return
-        self.gcode = self.hal.get_gcode_child(self.node())
+        self.gcode = self.hal.get_gcode_child(self)
         self.gcode_id = "T%d" % self.hal.get_commander().mk_gcode_id()
         # (multi)stepper list
-        self.stepper = [s.object for s in self.children_bygroup("stepper")]
+        self.stepper = [s for s in self.children_bygroup("stepper")]
         # heater and nozzle, and heater sharing (ex: e3d cyclop "shares" heater and nozzle with 2 steppers for dual filament extrusion)
         if self._sharing_tool is None:
-            self.heater = [h.object for h in self.children_bytype("tool", "tcontrol")]
-            self.nozzle = [n.object for n in self.children_bygroup("nozzle")]
+            self.heater = [h for h in self.children_bytype("tool", "tcontrol")]
+            self.nozzle = [n for n in self.children_bygroup("nozzle")]
         else:
             stool = self.hal.node(self._sharing_tool)
-            self.heater = [h.object for h in stool.children_bytype("tool", "tcontrol")]
-            self.nozzle = [n.object for n in stool.children_bygroup("nozzle")]
+            self.heater = [h for h in stool.children_bytype("tool", "tcontrol")]
+            self.nozzle = [n for n in stool.children_bygroup("nozzle")]
         # setup extruding geometry
         self.nozzle_diameter = self.nozzle[0]._diameter
         self.filament_area = math.pi * (self._filament_diameter * .5)**2
@@ -69,7 +71,7 @@ class Object(composite.Object):
             self.max_extrude_ratio = self._max_extrude_cross_section / self.filament_area
         else:
             self.max_extrude_ratio = def_max_cross_section / self.filament_area
-        logging.info("Extruder '%s', max_extrude_ratio=%.6f", self.node().name, self.max_extrude_ratio)
+        logger.info("Extruder '%s', max_extrude_ratio=%.6f", self.name(), self.max_extrude_ratio)
         self.ready = True
     def install(self, toolhead):
         self.toolhead = toolhead
@@ -147,7 +149,7 @@ class Object(composite.Object):
                 # Permit extrusion if amount extruded is tiny
                 return
             area = axis_r * self.filament_area
-            logging.debug("Overextrude: %s vs %s (area=%.3f dist=%.3f)", axis_r, self.max_extrude_ratio, area, move.move_d)
+            logger.debug("Overextrude: %s vs %s (area=%.3f dist=%.3f)", axis_r, self.max_extrude_ratio, area, move.move_d)
             raise homing.EndstopError(
                 "Move exceeds maximum extrusion (%.3fmm^2 vs %.3fmm^2)\n"
                 "See the 'max_extrude_cross_section' config option for details"
@@ -173,7 +175,7 @@ class Object(composite.Object):
                           start_v, cruise_v, accel)
     cmd_M572_help = "Set or report extruder pressure advance"
     def cmd_default_M572(self, params):
-        extruder = self.printer.lookup_object('toolhead').get_extruder()
+        extruder = self.printer.lookup('toolhead').get_extruder()
         extruder.cmd_M572(params)
     def cmd_M572(self, params):
         pressure_advance = self.gcode.get_float('ADVANCE', params, self._pressure_advance, minval=0.)
@@ -194,10 +196,5 @@ class Object(composite.Object):
         self.printer.event_send("extruder:activate_extruder")
 
 ATTRS = ("filament_diameter", "min_extrude_temp")
-def load_node_object(hal, node):
-    if node.attrs_check():
-        node.object = Object(hal, node)
-    else:
-        node.object = Dummy(hal,node)
-    return node.object
-
+def load_node(name, hal, cparser):
+    return Object(name, hal)

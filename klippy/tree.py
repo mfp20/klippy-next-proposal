@@ -1,177 +1,76 @@
-# Define a printer node := {name, attrs, children, module, object} and a printer tree := {printer, spare}
+# - Node base class := {name, children}.
+# - Part class(node).
+# - Composite part class(part).
+# - Root(composite).
+# - Builder:    create printer tree
+#               assemble hw parts into composite parts,
 # 
-# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import collections, logging
-from messaging import msg
-from messaging import Kerr as error
+import logging, collections, configparser, importlib
+from text import msg
+from error import KError as error
+import util
+logger = logging.getLogger(__name__)
 
-class PrinterNode:
-    def __init__(self, name, attrs = None, children = None):
-        self.name = name
-        self.attrs = collections.OrderedDict()
-        self.children = collections.OrderedDict()
-        self.module = None
-        self.object = None
+class Node:
+    def __init__(self, name, children = None):
+        self._name = name
+        if children:
+            self._children = children
+        else:
+            self._children = collections.OrderedDict()
+    def name(self):
+        "Return the full name, ie: 'group id'."
+        return self._name
     def group(self):
-        return self.name.split(" ")[0]
+        "Return the group part of name."
+        return self.name().split(" ")[0]
     def id(self):
-        parts = self.name.split(" ")
+        "Return the id part of name."
+        parts = self.name().split(" ")
         if len(parts) > 1:
             return parts[1]
         else:
-            logging.warning("'%s' doesn't have group.", self.name)
+            logger.warning("'%s' doesn't have a group in name.", self.name())
             return parts[0]
-    def parent(self, root, childname):
+    def parent(self, childname, root):
+        "Return node's parent."
         if not root: root = self
-        for cn in root.children.keys():
+        for cn in root._children.keys():
            if cn.startswith(childname): return root
-           ccn = root.children[cn].parent(root.children[cn], childname)
+           ccn = root._children[cn].parent(childname, root._children[cn])
            if ccn: return ccn
         return None
-    # attrs needed for object __init__
-    def attrs_check(self, attrs = None):
-        if self.module:
-            if attrs:
-                myattrs = "ATTRS_"+attrs.upper()
-            else:
-                myattrs = "ATTRS"
-            if hasattr(self.module, myattrs):
-                for a in getattr(self.module, myattrs):
-                    if a not in self.attrs:
-                        if self.name:
-                            logging.warning("AttrsCheck: no option '%s' for node '%s'.", a, self.name)
-                        return False
-            else:
-                if self.name:
-                    logging.warning("AttrsCheck: no attrs for node '%s'.", self.name)
-                return False
-        else:
-            if self.name:
-                logging.warning("AttrsCheck: no module for node '%s'.", self.name)
-            return False
-        return True
-    # set attr
-    def attr_set(self, key, value):
-        self.attrs[key] = value
-    # get attr
-    def attr(self, attr):
-        #logging.warning("ATTR_GET: '%s' ATTR %s", self.name, attr)
-        try:
-            return self.attrs[attr]
-        except Exception as e:
-            logging.info("\tEXCEPTION! '%s' - '%s'", self.name, attr)
-            logging.info(self.attrs)
-            return "|||noattr|||"
-    # validate and create attrs
-    def attr_check_default(self, template):
-        if "default" in template:
-            return True
-        return False
-    def attr_check_minmax(self, template, value):
-        if "minval" in template:
-            if value < template["minval"]:
-                return True
-        if "maxval" in template:
-            if value > template["maxval"]:
-                return True
-        return False
-    def attr_check_abovebelow(self, template, value):
-        if "above" in template:
-            if value <= template["above"]:
-                return True
-        if "below" in template:
-            if value >= template["below"]:
-                return True
-        return False
-    def attr_check_choice(self, template, value):
-        if value in template["choices"]:
-            return False
-        return True
-    # load node attrs as object's attrs
-    def _name2ref(self, name, value):
-        #logging.info("SET '%s' to '%s'", name, value)
-        if hasattr(self.object, name):
-            raise error("Attr exists. Please check option name '%s' for '%s'", name, self.name)
-        else:
-            setattr(self.object, name, value)
-        #logging.info("\t'%s' is '%s'", name, getattr(self.object, name))
-    def attrs2obj(self):
-        if hasattr(self, "attrs"): 
-            for a in self.object.metaconf:
-                # convert var references in values, if a var reference is given as value for another var
-                for m in self.object.metaconf[a].items():
-                    if isinstance(m[1], str) and m[1].startswith("self."):
-                        self.object.metaconf[a][m[0]] = getattr(self.object, m[1].split(".", 1)[1])
-                #
-                if a in self.attrs:
-                    if self.object.metaconf[a]["t"] == "bool":
-                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                            value = bool(getattr(self.object, self.attr(a).split(".", 1)[1]))
-                        else:
-                            value = bool(self.attr(a))
-                    elif self.object.metaconf[a]["t"] == "int":
-                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                            value = int(getattr(self.object, self.attr(a).split(".", 1)[1]))
-                        else:
-                            value = int(self.attr(a))
-                        if self.attr_check_minmax(self.object.metaconf[a], value):
-                            raise error("Value '%s' exceed min/max for option '%s' in node '%s'." % (value, a, self.name))
-                    elif self.object.metaconf[a]["t"] == "float":
-                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                            value = float(getattr(self.object, self.attr(a).split(".", 1)[1]))
-                        else:
-                            value = float(self.attr(a))
-                        if self.attr_check_minmax(self.object.metaconf[a], value):
-                            raise error("Value '%s' exceed min/max for option '%s' in node '%s'." % (value, a, self.name))
-                        if self.attr_check_abovebelow(self.object.metaconf[a], value):
-                            raise error("Value '%s' above/below maximum/minimum for option '%s' in node '%s'." % (value, a, self.name))
-                    elif self.object.metaconf[a]["t"] == "str":
-                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                            value = str(getattr(self.object, self.attr(a).split(".", 1)[1]))
-                        else:
-                            value = str(self.attr(a))
-                    elif self.object.metaconf[a]["t"] == "choice":
-                        if isinstance(self.attr(a), str) and self.attr(a).startswith("self."):
-                            value = getattr(self.object, self.attr(a).split(".", 1)[1])
-                        else:
-                            value = self.attr(a)
-                        if value == "none" or value == "None":
-                            value = None
-                        if self.attr_check_choice(self.object.metaconf[a], value):
-                            raise error("Value '%s' is not a choice for option '%s' in node '%s'." % (value, a, self.name))
-                    else:
-                        raise error("Unknown option type '%s' in template, for node '%s'" % (a, self.name))
-                else:
-                    if self.attr_check_default(self.object.metaconf[a]):
-                        value = self.object.metaconf[a]["default"]
-                    else:
-                        raise error("Option '%s' is mandatory for node '%s'" % (a, self.name))
-                # each attr is converted into an object method
-                self._name2ref("_"+a, value)
-            # cleanup
-            self.object.metaconf.clear()
-            # TODO remove any use of self.attrs after init, to clear the var here
-            #del(self.attrs)
-    # add new child
-    def child_set(self, node):
-        self.children[node.name] = node
-    # get child by name
-    def child_get(self, name):
-        return self.children[name]
-    # get first child (deep recursion) which name starts with "name"
-    def child_get_first(self, name, root = None):
+    def parent_bygroup(self, group, root):
+        "Return the first ancestor having the given group."
         if not root: root = self
-        if root.name.startswith(name): 
+        parentnode = self.parent(root,self.name())
+        while not parentnode.name().startswith(parentgroup):
+            logger.warning("TODO PARENT_BYGROUP: %s", parentnode.name())
+            if parentnode.name() == "printer":
+                return None
+            parentnode = parentnode.parent(root,parentnode.name())
+        return parentnode
+    def child_add(self, node):
+        "Add new child."
+        self._children[node.name()] = node
+    def child(self, name):
+        "Get child by name."
+        return self._children[name]
+    def child_deep(self, name, root = None):
+        "Get first child (deep recursion) which name starts with given name."
+        if not root: root = self
+        if root.name().startswith(name): 
             return root
-        for child in root.children.values():
-           n = child.child_get_first(name, child)
+        for child in root._children.values():
+           n = child.child_deep(name, child)
            if n: return n
         return None
-    # move child to another parent
     def child_move(self, name, newparentname, root = None):
+        "Move child to another parent."
         if not root: root = self
         child = root.child_del(name, root)
         if child:
@@ -180,42 +79,60 @@ class PrinterNode:
                 newparent.children[name] = child
                 return True
         return False
-    # delete child
     def child_del(self, name, root = None):
+        "Delete child."
         if not root: root = self
         parent = root.parent(root, name)
         if parent:
             return parent.children.pop(name)
         return None
-    # list shallow children
-    def children_list(self, name = None):
+    def children(self, name = None):
+        "List shallow children."
         if name:
             cl = list()
-            for c in self.children.values():
-                if c.name.startswith(name):
+            for c in self._children.values():
+                if c.name().startswith(name):
                     cl.append(c)
             return cl
         else:
-            return self.children.values()
-    # list deep children
+            return self._children.values()
+    def children_bygroup(self, group):
+        "Return a list of shallow children with given group."
+        return self.children(group+" ")
+    def children_bytype(self, group, typ):
+        "Return a lst of shallow children with given type."
+        parts = list()
+        for p in self.children_bygroup(group):
+            if p._type == typ:
+                parts.append(p)
+        return parts
     def children_deep(self, l = list(), root = None):
+        "Return a list of deep children."
         if not root: root = self
         if not l: l.append(root)
-        for name, child in root.children.items():
+        for child in root.children():
             l.append(child)
             self.children_deep(l, child)
         return l
-    # list deep children which name starts with "name"
     def children_deep_byname(self, name, l, root = None):
+        "List deep children having the given name."
         if not root: root = self
-        if root.name.startswith(name):
+        if root.name().startswith(name):
             if not l:
                 l.append(root)
-        for child in root.children.values():
-            if child.name.startswith(name):
+        for child in root.children():
+            if child.name().startswith(name):
                 l.append(child)
             child.children_deep_byname(name, l, child)
         return l
+    def children_deep_bygroup(self, group):
+        return self.children_deep_byname(group+" ", list(), self)
+    def children_deep_bytype(self, group, typ):
+        parts = list()
+        for p in self.children_deep_bygroup(group):
+            if p._type == typ:
+                parts.append(p)
+        return parts
     # list shallow children names
     def children_names(self, node = None):
         if not node: node = self
@@ -228,110 +145,10 @@ class PrinterNode:
             l.append(child.name)
             self.children_names_deep(l, child)
         return l
-    # methods to collect formatted information about the node
-    def show_details_printer(self, node = None, indent = 0):
-        if node == None: node = self
-        txt = "\t"*(indent+1) + "--------------------- (events)\n"
-        for e in sorted(node.object.event_handlers):
-            methparts = str(node.object.event_handlers[e]).split(".",1)[1].split("instance", 1)[0].split(" ")
-            meth = methparts[2] + "." + methparts[0]
-            txt = txt + str('\t' * (indent+1) + "- " + str(e).ljust(30, " ") + meth[1:] + "\n")
-        return txt
-    def show_details_hal(self, node = None, indent = 0):
-        if node == None: node = self
-        txt = "\t"*(indent+1) + "----------------- (tree nodes)\n"
-        node = self.children_deep()
-        nodedict = {}
-        for n in node:
-            nodedict[n.name] = n
-        for n in sorted(nodedict):
-            txt = txt + '\t' * (indent+1) + "- " + str(n).ljust(20, " ") + " " + str(nodedict[n].object).split(" ")[0][1:] + "\n"
-        return txt
-    def show_details_reactor(self, node = None, indent = 0):
-        if node == None: node = self
-        # timers
-        txt = "\t"*(indent+1) + "--------------------- (timers)\n"
-        for t in sorted(node.object._timers):
-            txt = txt + '\t' * (indent+1) + "- " + str(t).ljust(20, " ") + "\n"
-        # callbacks
-        txt = "\t"*(indent+1) + "------------------ (callbacks)\n"
-        for c in sorted(node.object._pipe_fds):
-            txt = txt + '\t' * (indent+1) + "- " + str(c).ljust(20, " ") + "\n"
-        # file descriptors
-        txt = "\t"*(indent+1) + "------------------------ (FDs)\n"
-        for n in sorted(node.object._fds):
-            txt = txt + '\t' * (indent+1) + "- " + str(n).ljust(5, " ") + ": " + str(node.object._fds[n]).split(" ")[2] + "\n"
-        # greenlets
-        #txt = "\t"*(indent+1) + "------------------ (greenlets)\n"
-        #for g in sorted(node.object._greenlets):
-        #    txt = txt + '\t' * (indent+1) + "- " + str(g.run).ljust(20, " ") + "\n"
-        return txt
-    def show_details_commander(self, node = None, indent = 0):
-        if node == None: node = self
-        txt = "\t"*(indent+2) + "------------------- (commands)\n"
-        for cmd in sorted(node.object.command_handler.keys()):
-            txt = txt + str('\t' * (indent+2) + "- " + str(cmd).ljust(20, " ")) 
-            if cmd in node.object.ready_only:
-                txt = txt + " (ready only)"
-            txt = txt + "\n"
-        for cmder in node.object.commander:
-            txt = txt + str('\t' * (indent+1) + "- " + str(cmder).ljust(20, " ")+"\n")
-            txt = txt + "\t"*(indent+2) + "------------------- (commands)\n"
-            for cmd in sorted(node.object.commander[cmder].command_handler.keys()):
-                txt = txt + str('\t' * (indent+2) + "- " + str(cmd).ljust(20, " ")) 
-                if cmd in node.object.commander[cmder].ready_only:
-                    txt = txt + " (ready only)"
-                txt = txt + "\n"
-        return txt
-    def show_details_controller(self, node = None, indent = 0):
-        if node == None: node = self
-        txt = "\t"*(indent+1) + "\t(part)\t\t\t(pin type)\t\t\t(used pin)\n"
-        used = []
-        for kind in [node.object.virtual, 
-                node.object.endstop, 
-                node.object.thermometer, 
-                node.object.hygrometer, 
-                node.object.barometer, 
-                node.object.filament, 
-                node.object.stepper, 
-                node.object.heater,
-                node.object.cooler]:
-            for part in sorted(kind):
-                for pin in sorted(kind[part].pin):
-                    used.append((part, pin, kind[part].pin[pin]))
-        for part, pin, obj in sorted(used):
-            txt = txt + "\t" * (indent+1) + "- " + part.ljust(20, " ") + " " + str(obj).split(" ")[0][1:].ljust(40, " ") + " " + pin + "\n"
-        return txt
-    def show_details_timing(self, node = None, indent = 0):
-        return ""
-    def show_details_temperature(self, node = None, indent = 0):
-        return ""
-    def show_details_mcu(self, node = None, indent = 0):
-        if node == None: node = self
-        txt = ""
-        # registered serial handlers
-        if len(node.object.mcu._serial.handlers) > 0:
-            txt = txt + "\t"*(indent+1) + "------------ (serial handlers)\n"
-            txt = txt + "\t"*indent + "\t(name, oid)\t\t(callback)\n"
-            for h in sorted(node.object.mcu._serial.handlers):
-                hparts = str(node.object.mcu._serial.handlers[h]).split(" ")
-                hname = hparts[2]
-                txt = txt + str("\t" * indent + "\t" + str(h).ljust(20, " ") + "\t" + hname + "\n")
-        # available pins and their config
-        matrix = node.object.pins.get_matrix()
-        if len(matrix) > 0:
-            txt = txt + "\t"*(indent+1) + "------------------- (all pins)\n"
-            txt = txt + "\t"*indent + "\t(pin)\t(alias)\t(pull)\t(invert)\t(used)\n"
-            for p in sorted(matrix):
-                if not p[2]:
-                    p[2] = False
-                txt = txt + str("\t" * indent + "\t  " + str(p[0]) + "\t" + str(p[1]) + "\t" + str(p[3]) + "\t" + str(p[4]) + "\t\t" + str(p[2]) + "\n")
-        txt = txt + "\t"*(indent+1) + "------------------------------\n"
-        return txt
-    # return formatted information about node, additional information:
-    # [module, object, attrs, {children | deep}, details]
-    def show(self, node = None, indent = 0, plus = ""):
-        if node == None: node = self
+    #
+    # plus := [module,, attrs, {children | deep}, details]
+    def show(self, indent = 0, plus = ""):
+        "Return formatted information about this node."
         options = plus.split(",")
         txt = ""
         startline = "\t"*indent
@@ -339,61 +156,316 @@ class PrinterNode:
         # add header
         if "details" in options:
             txt = txt + startline + "---" + newline
-        # node name, module and object
-        txt = txt + startline + "* " + node.name.upper().ljust(30, " ")
+        # node name, module and
+        txt = txt + startline + "* " + self.name().upper().ljust(30, " ")
         if "module" in options:
-            if node.module:
-                txt = txt + " | " + str(str(node.module).split(" ")[1] + " (" + str(node.module).split(" ")[3][:-1]).ljust(15, " ") + ")"
+            # TODO
+            if self.module:
+                txt = txt + " | " + str(str(self.module).split(" ")[1] + " (" + str(self.module).split(" ")[3][:-1]).ljust(15, " ") + ")"
             else:
                 txt = txt + " | no module".ljust(15, " ")
         if "object" in options:
-            if node.object:
-                txt = txt + " | " + str(node.object).split(" ")[0][1:].ljust(15, " ")
-            else:
-                if node.name != "spares":
-                    txt = txt + " | no object".ljust(15, " ")
+            # TODO
+            txt = txt + " | " + str(self).split(" ")[0][1:].ljust(15, " ")
         txt = txt + newline
-        # show attrs
-        if "attrs" in options:
-            if node.attrs:
-                maxlen = len(max(node.attrs.keys(), key=len))
-                for key, value in node.attrs.items():
-                    txt = txt + startline + "  - " + str(key).ljust(maxlen, " ") + ": " + str(value) + newline
+        if "attrs" in options and hasattr(self, "_show_attrs"):
+            # TODO
+            txt = txt + self._show_attrs(indent)
         # special nodes, print details: printer events, gcode commands, ...
-        if "details" in options:
-            if node.name == "printer" and node.object:
-                txt = txt + self.show_details_printer(node, indent)
-            elif node.name == "hal" and node.object:
-                txt = txt + self.show_details_hal(node, indent)
-            elif node.name == "reactor" and node.object:
-                txt = txt + self.show_details_reactor(node, indent)
-            elif node.name == "commander" and node.object:
-                txt = txt + self.show_details_commander(node, indent)
-            elif node.name == "controller" and node.object:
-                txt = txt + self.show_details_controller(node, indent)
-            elif node.name == "timing" and node.object:
-                txt = txt + self.show_details_timing(node, indent)
-            elif node.name == "temperature" and node.object:
-                txt = txt + self.show_details_temperature(node, indent)
-            elif node.name.startswith("mcu ") and node.object:
-                txt = txt + self.show_details_mcu(node, indent)
+        if "details" in options and hasattr(self, "_show_details"):
+            txt = txt + self._show_details(indent)
         # show children
         if "children" in options:
-            if len(node.children) < 1: 
+            if len(self._children) < 1: 
                 txt = txt + startline + "\t* none" + newline
                 return txt
-            for k in node.children.keys():
+            for k in self._children.keys():
                 txt = txt + startline + "\t* "+ k + newline
         elif "deep" in options:
-            for key, value in node.children.items():
-                txt = txt + self.show(value, indent+1, plus)
+            for node in self._children.values():
+                txt = txt + node.show(indent+1, plus)
         #
         return txt
 
-class PrinterTree:
-    def __init__(self): 
-        self.printer = PrinterNode("printer")
-        self.spare = PrinterNode("spares")
-    def show(self, indent = 0):
-        return self.printer.show(None, indent, "deep") + "\n" + self.spare.show(None, indent, "deep")
+class Part(Node):
+    # holds node attrs, later converted into vars
+    metaconf = collections.OrderedDict()
+    def __init__(self, name, children = None, hal = None):
+        super().__init__(name, children)
+        self.hal = hal
+        self.pin = {}
+        self.real = True
+        self.ready = False
+    def _meta_add(self, name, value):
+        "Add named value as's var."
+        if hasattr(self, name):
+            raise error("Attr exists. Please check option name '%s' for '%s'", name, self.name())
+        else:
+            setattr(self, name, value)
+    # validate and create attrs
+    def _meta_check_default(self, template):
+        if "default" in template:
+            return True
+        return False
+    def _meta_check_minmax(self, template, value):
+        if "minval" in template:
+            if value < template["minval"]:
+                return True
+        if "maxval" in template:
+            if value > template["maxval"]:
+                return True
+        return False
+    def _meta_check_abovebelow(self, template, value):
+        if "above" in template:
+            if value <= template["above"]:
+                return True
+        if "below" in template:
+            if value >= template["below"]:
+                return True
+        return False
+    def _meta_check_choice(self, template, value):
+        if value in template["choices"]:
+            return False
+        return True
+    def meta_conf(self, cparser):
+        "Convert all node attrs to vars."
+        for a in self.metaconf:
+            # convert var references in values, if a var reference is given as value for another var
+            for m in self.metaconf[a].items():
+                if isinstance(m[1], str) and m[1].startswith("self."):
+                    self.metaconf[a][m[0]] = getattr(self, m[1].split(".", 1)[1])
+            #
+            if a in cparser.options(self.name()):
+                if self.metaconf[a]["t"] == "bool":
+                    if isinstance(cparser.get(self.name(), a), str) and cparser.get(self.name(), a).startswith("self."):
+                        value = bool(getattr(self, cparser.get(self.name(), a).split(".", 1)[1]))
+                    else:
+                        value = bool(cparser.get(self.name(), a))
+                elif self.metaconf[a]["t"] == "int":
+                    if isinstance(cparser.get(self.name(), a), str) and cparser.get(self.name(), a).startswith("self."):
+                        value = int(getattr(self, cparser.get(self.name(), a).split(".", 1)[1]))
+                    else:
+                        value = int(cparser.get(self.name(), a))
+                    if self._meta_check_minmax(self.metaconf[a], value):
+                        raise error("Value '%s' exceed min/max for option '%s' in node '%s'." % (value, a, self.name))
+                elif self.metaconf[a]["t"] == "float":
+                    if isinstance(cparser.get(self.name(), a), str) and cparser.get(self.name(), a).startswith("self."):
+                        value = float(getattr(self, cparser.get(self.name(), a).split(".", 1)[1]))
+                    else:
+                        value = float(cparser.get(self.name(), a))
+                    if self._meta_check_minmax(self.metaconf[a], value):
+                        raise error("Value '%s' exceed min/max for option '%s' in node '%s'." % (value, a, self.name))
+                    if self._meta_check_abovebelow(self.metaconf[a], value):
+                        raise error("Value '%s' above/below maximum/minimum for option '%s' in node '%s'." % (value, a, self.name))
+                elif self.metaconf[a]["t"] == "str":
+                    if isinstance(cparser.get(self.name(), a), str) and cparser.get(self.name(), a).startswith("self."):
+                        value = str(getattr(self, cparser.get(self.name(), a).split(".", 1)[1]))
+                    else:
+                        value = str(cparser.get(self.name(), a))
+                elif self.metaconf[a]["t"] == "choice":
+                    if isinstance(cparser.get(self.name(), a), str) and cparser.get(self.name(), a).startswith("self."):
+                        value = getattr(self, cparser.get(self.name(), a).split(".", 1)[1])
+                    else:
+                        value = cparser.get(self.name(), a)
+                    if value == "none" or value == "None":
+                        value = None
+                    if self._meta_check_choice(self.metaconf[a], value):
+                        raise error("Value '%s' is not a choice for option '%s' in node '%s'." % (value, a, self.name()))
+                else:
+                    raise error("Unknown option type '%s' in template, for node '%s'" % (a, self.name()))
+            else:
+                if self._meta_check_default(self.metaconf[a]):
+                    value = self.metaconf[a]["default"]
+                else:
+                    logger.warning("Option '%s' is mandatory for node '%s'" % (a, self.name()))
+                    self.real = False
+            # each attr is converted into an method
+            self._meta_add("_"+a, value)
+        # cleanup
+        self.metaconf.clear()
+        # TODO remove any use of self.attrs after init, to clear the var here
+        #del(self.attrs)
+
+class Composite(Part):
+    def __init__(self, name, children = None, hal = None):
+        super().__init__(name, children, hal)
+    def _build(self, indent = 1):
+        "Build the composite."
+        # for each child
+        for c in self.children():
+            # build its children
+            if hasattr(c, "_build") and callable(c._build):
+                c._build(indent+1)
+            # configure its leaves
+            if hasattr(c, "_configure") and callable(c._configure):
+                c._configure()
+        # init self
+        if hasattr(self, "_init") and callable(self._init):
+            self._init()
+
+class Root(Composite):
+    "Tree topology."
+    def __init__(self, name, hal): 
+        super().__init__(name, hal = hal)
+        self.spare = Node("spare")
+    def node(self, name):
+        "Return the named node."
+        return self.child_deep(name)
+    def node_add(self, parentname, child):
+        "Add child to parentname node."
+        self.child_deep(parentname).children[child.name()] = child
+    def node_del(self, name):
+        "Delete the named node."
+        return self.parent(None, name).children.pop(name)
+    def node_move(self, name, newparentname):
+        "Move the named node to newparentname node."
+        self.node_add(newparentname, self.node_del(name))
+    def node_spare(self, name):
+        "Move the named node to spares for later use."
+        self.spare.children[name] = self.node_del(name)
+    def node_show(self, name, indent = 0, plus = ""):
+        "Return a string describing the named node."
+        return self.node(name).show(indent, plus)
+    def show_tree(self, indent = 0):
+        "Return a string containing the tree topology (with spares)."
+        return self.show(indent, "deep") + "\n" + self.spare.show(indent, "deep")
+
+class Config:
+    "Config file parser and manager."
+    def __init__(self, hal):
+        logger.debug("- Reading config file.")
+        self.hal = hal
+        self._parser = configparser.SafeConfigParser()
+    def read(self):
+        self._parser.read(self.hal.get_printer().get_args().config_file)
+    def sections(self, startswith = None, exclude = None):
+        if startswith:
+            return [s for s in self._parser.sections() if s.startswith(startswith)]
+        elif exclude:
+            l = self._parser.sections()
+            for e in exclude:
+                l = [s for s in l if not s.startswith(e)]
+            return l
+        else:
+            return self._parser.sections()
+    def group(self, section):
+        return section.split(" ")[0]
+    def id(self, section):
+        parts = section.split(" ")
+        if len(parts) == 2:
+            return parts[1]
+        else:
+            return parts[0]
+    def get(self, section, option):
+        return self._parser.get(section, option)
+    def options(self, section):
+        return self._parser.options(section)
+    def items(self, section):
+        return self._parser.items(section)
+    def show_section(self, section):
+        logger.info('Section:%s', section)
+        logger.info('\tOptions:%s', self.options(section))
+        for name, value in self.items(section):
+            logger.info('\t%s = %s' % (name, value))
+        logger.info('')
+    def show(self):
+        for section in self.sections():
+            self.show_section(section)
+    def write(self):
+        pass
+
+class Builder:
+    "Tree and parts builder."
+    def __init__(self, hal, cparser):
+        self.hal = hal
+        parts = collections.OrderedDict()
+        partnames_to_remove = set()
+        # collect parts
+        logger.debug("- Building printer tree.")
+        for p in self.hal.pgroups:
+            for s in cparser.sections(p+" "):
+                parts[s] = self.hal.obj_load(cparser, s)
+        # collect plugins as parts
+        for m in cparser.sections(exclude=["printer"]+self.hal.pgroups+self.hal.cgroups):
+            #parts[m] = self._try_load_module(cparser, m)
+            pass
+        # collect composites
+        composites = collections.OrderedDict()
+        for p in self.hal.cgroups:
+            for s in cparser.sections(p+" "):
+                composites[s] = self.hal.obj_load(cparser, s, parts, composites)
+        # dump spare composites in parts
+        for c in composites:
+            parts[c] = composites[c]
+        del(composites)
+        # adding parts and composites nodes to printer root.
+        for a in cparser.options("printer"):
+            if a in self.hal.pgroups or a in self.hal.cgroups:
+                if a == "mcu":
+                    for n in cparser.get("printer", a).split(","):
+                        self.hal.get_controller().register_part(parts[a+" "+n])
+                        self.hal.get_controller().child_add(parts.pop(a+" "+n))
+                else:
+                    for n in cparser.get("printer", a).split(","):
+                        self.hal.get_printer().child_add(parts.pop(a+" "+n))
+            elif a == "toolhead":
+                for n in cparser.get("printer", a).split(","):
+                    partnames_to_remove = partnames_to_remove.union(self.hal._compose_toolhead(a+" "+n, cparser, parts))
+        # adding virtual pins
+        for p in parts:
+            if p.startswith("virtual "):
+                self.hal.get_controller().register_part(parts[p])
+                self.hal.get_controller().child_add(parts[p])
+                partnames_to_remove.add(p)
+        # adding plugins nodes
+        for m in cparser.sections(exclude=["printer"]+self.hal.pgroups+self.hal.cgroups):
+            if m in parts:
+                partnames_to_remove = partnames_to_remove.union(parts[m].load_tree_node(self.hal, parts[m], parts))
+        # cleanup
+        for i in partnames_to_remove:
+            if i in parts:
+                parts.pop(i)
+        # save leftover parts to spares
+        for i in parts:
+            self.hal.get_printer().spare.child_add(parts[i])
+        del(parts)
+        logger.debug(self.hal.get_printer().show_tree())
+        #
+        logger.debug("- Configuring parts.")
+        # build/configure (if needed) each printer shallow children
+        for node in self.hal.get_printer().children():
+            if node.name() != "hal" and node.name() != "reactor" and not node.name().startswith("kinematic "):
+                # build printer's children
+                if hasattr(node, "_build") and callable(node._build):
+                    node._build()
+                # configure printer's leaves
+                if hasattr(node, "_configure") and callable(node._configure):
+                    node._configure()
+        # configure toolhead(s)
+        for t in self.hal.get_printer().children_deep_byname("toolhead ", list()): 
+            t._build()
+        # init kinematics
+        for k in self.hal.get_printer().children_deep_byname("kinematic ", list()):
+            k._init()
+        # last check before linkings with "register()"
+        for node in self.hal.get_printer().children_deep(list(), self.hal.get_printer()):
+            if node.name() != 'printer' and hasattr(node, "ready"):
+                if not node.ready:
+                    logger.debug("\t %s NOT READY. Moving to spares.", node.name())
+                    # TODO fix line, move from root to spare
+                    self.hal.get_printer().spare.child_add(node.parent(node.name(), self.hal.get_printer()).children.pop(node.name()))
+            else:
+                if node.name() != "printer":
+                    logger.debug("\t %s NOT READY. Moving to spares.", node.name())
+                    # TODO fix line, move from root to spare
+                    self.hal.get_printer().spare.child_add(node.parent(node.name(), self.hal.get_printer()).children.pop(node.name()))
+        # for each node, run.register() (if any)
+        logger.debug("- Registering events and commands.")
+        for node in self.hal.get_printer().children_deep(list(), self.hal.get_printer()):
+            if hasattr(node, "_register") and callable(node._register):
+                node._register()
+        # load printer's sniplets, development code to be tested
+        logger.debug("- Autoloading extra printlets.")
+        #self.hal._try_autoload_printlets()
+        #logger.debug(self.show("printer", plus="attrs,details,deep"))
 

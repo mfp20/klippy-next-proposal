@@ -3,8 +3,12 @@
 # Copyright (C) 2016-2018  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import os, logging
+import logging, os
 import cffi
+
+from text import msg
+from error import KError as error
+logger = logging.getLogger(__name__)
 
 
 ######################################################################
@@ -167,13 +171,13 @@ def check_build_code(srcdir, target, sources, cmd, other_files=[]):
     src_times = get_mtimes(srcdir, sources + other_files)
     obj_times = get_mtimes(srcdir, [target])
     if not obj_times or max(src_times) > min(obj_times):
-        logging.info("Building C code module %s", target)
+        logger.info("Building C code module %s", target)
         srcfiles = [os.path.join(srcdir, fname) for fname in sources]
         destlib = os.path.join(srcdir, target)
         res = os.system(cmd % (destlib, ' '.join(srcfiles)))
         if res:
             msg = "Unable to build C code module (error=%s)" % (res,)
-            logging.error(msg)
+            logger.error(msg)
             raise Exception(msg)
 
 FFI_main = None
@@ -193,7 +197,7 @@ def get_ffi():
         FFI_lib = FFI_main.dlopen(os.path.join(srcdir, DEST_LIB))
         # Setup error logging
         def logging_callback(msg):
-            logging.error(FFI_main.string(msg))
+            logger.error(FFI_main.string(msg))
         pyhelper_logging_callback = FFI_main.callback(
             "void(const char *)", logging_callback)
         FFI_lib.set_python_logging_callback(pyhelper_logging_callback)

@@ -15,7 +15,7 @@ class Homing:
     def __init__(self, hal):
         self.hal = hal
         self.printer = self.hal.get_printer()
-        self.toolhead = printer.lookup_object('toolhead')
+        self.toolhead = printer.lookup('toolhead')
         self.changed_axes = []
         self.verify_retract = True
     def set_no_verify_retract(self):
@@ -143,7 +143,7 @@ class Homing:
         try:
             self.toolhead.get_kinematics().home(self)
         except CommandError:
-            self.printer.lookup_object('stepper_enable').motor_off()
+            self.printer.lookup('stepper_enable').motor_off()
             raise
 
 class CommandError(Exception):
@@ -170,7 +170,7 @@ class HomingOverride:
         gcode_macro = self.printer.try_load_module(config, 'gcode_macro')
         self.template = gcode_macro.load_template(config, 'gcode')
         self.in_script = False
-        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode = self.printer.lookup('gcode')
         self.prev_G28 = self.gcode.register_command("G28", None)
         self.gcode.register_command("G28", self.cmd_G28)
     def cmd_G28(self, params):
@@ -200,7 +200,7 @@ class HomingOverride:
             return
 
         # Calculate forced position (if configured)
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
         pos = toolhead.get_position()
         homing_axes = []
         for axis, loc in enumerate(self.start_pos):
@@ -236,7 +236,7 @@ class HomingSafeZ:
         self.max_z = config.getsection('stepper_z').getfloat('position_max')
         self.speed = config.getfloat('speed', 50.0, above=0.)
         self.move_to_previous = config.getboolean('move_to_previous', False)
-        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode = self.printer.lookup('gcode')
         self.prev_G28 = self.gcode.register_command("G28", None)
         self.gcode.register_command("G28", self.cmd_G28)
 
@@ -244,7 +244,7 @@ class HomingSafeZ:
             raise config.error("homing_override and safe_z_homing cannot be used simultaneously")
 
     def cmd_G28(self, params):
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
 
         # Perform Z Hop if necessary
         if self.z_hop != 0.0:
@@ -305,7 +305,7 @@ class HomingSafeZ:
             self.gcode.reset_last_position()
 
     def _perform_z_hop(self, pos):
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
         # Perform the Z-Hop
         toolhead.set_position(pos, homing_axes=[2])
         pos[2] = pos[2] + self.z_hop
@@ -326,7 +326,7 @@ class HomingHeaters:
         self.disable_heaters = []
         self.steppers_needing_quiet = config.get("steppers", "")
         self.flaky_steppers = []
-        self.pheater = self.printer.lookup_object('heater')
+        self.pheater = self.printer.lookup('heater')
         self.target_save = {}
     def handle_connect(self):
         # heaters to disable
@@ -341,7 +341,7 @@ class HomingHeaters:
                     "One or more of these heaters are unknown: %s" % (
                         self.disable_heaters))
         # steppers valid?
-        kin = self.printer.lookup_object('toolhead').get_kinematics()
+        kin = self.printer.lookup('toolhead').get_kinematics()
         all_steppers = [s.get_name() for s in kin.get_steppers()]
         self.flaky_steppers = [n.strip()
                          for n in self.steppers_needing_quiet.split(',')]

@@ -1,26 +1,29 @@
-# Cooler support file.
+# Cooler support.
 # 
-# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
+from text import msg
+from error import KError as error
 from parts import actuator
+logger = logging.getLogger(__name__)
 
 # TODO
 class Dummy(actuator.Object):
-    def __init__(self, hal, node):
-        actuator.Object.__init__(self,hal,node)
-        logging.warning("(%s) cooler.Dummy", self.name)
-    def configure(self):
+    def __init__(self, name, hal):
+        super().__init__(name ,hal)
+        logger.warning("(%s) cooler.Dummy", name)
+    def _configure(self):
         if self.ready:
             return
-        logging.warning("(%s) cooler.configure: TODO dummy MCU_digital_out and MCU_pwm", self.get_name())
+        logger.warning("(%s) cooler.configure: TODO dummy MCU_digital_out and MCU_pwm", self.name())
         self.ready = True
 
 class Object(actuator.Object):
-    def __init__(self, hal, node):
-        actuator.Object.__init__(self,hal,node)
+    def __init__(self, name, hal):
+        super().__init__(name, hal)
         self.metaconf["type"] = {"t":"str"}
         self.metaconf["pin"] = {"t":"str"}
         self.metaconf["power_max"] = {"t":"float", "default":1., "above":0., "maxval":1.}
@@ -28,27 +31,22 @@ class Object(actuator.Object):
         # pwm min and max
         self.metaconf["min"] = {"t":"float", "default":0., "minval":0.}
         self.metaconf["max"] = {"t":"float", "default":1., "maxval":1., "above":"self._min"}
-    def configure(self):
+    def _configure(self):
         if self.ready:
             return
-        tcnode = self.node().parent(self.hal.tree.printer, self.name)
-        gov = tcnode.object._control
+        tcnode = self.parent(self.name(), self.hal.get_printer())
+        gov = tcnode._control
         if gov == "watermark" and self._power_max == 1.:
             self.pin[self._pin] = self.hal.get_controller().pin_setup("out_digital", self._pin)
         else:
             self.pin[self._pin] = self.hal.get_controller().pin_setup("out_pwm", self._pin)
         #
-        self.hal.get_controller().register_part(self.node())
+        self.hal.get_controller().register_part(self)
         #
         self.ready = True
 
-ATTRS = ("type", "pin",)
-def load_node_object(hal, node):
-    if node.attrs_check():
-        node.object = Object(hal, node)
-    else:
-        node.object = Dummy(hal,node)
-    return node.object
+def load_node(name, hal, cparser):
+    return Object(name, hal)
 
 # Support fans that are enabled when temperature exceeds a set threshold
 #
@@ -66,13 +64,13 @@ class TemperatureFan:
         self.name = config.get_name().split()[1]
         self.printer = config.get_printer()
         self.fan = fan.PrinterFan(config, default_shutdown_speed=1.)
-        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode = self.printer.lookup('gcode')
         self.min_temp = config.getfloat('min_temp', minval=KELVIN_TO_CELSIUS)
         self.max_temp = config.getfloat('max_temp', above=self.min_temp)
-        self.sensor = self.printer.lookup_object('heater').setup_sensor(config)
+        self.sensor = self.printer.lookup('heater').setup_sensor(config)
         self.sensor.setup_minmax(self.min_temp, self.max_temp)
         self.sensor.setup_callback(self.temperature_callback)
-        self.printer.lookup_object('heater').register_sensor(config, self)
+        self.printer.lookup('heater').register_sensor(config, self)
         self.speed_delay = self.sensor.get_report_time_delta()
         self.max_speed = config.getfloat('max_speed', 1., above=0., maxval=1.)
         self.min_speed = config.getfloat('min_speed', 0.3, minval=0., maxval=1.)
@@ -149,7 +147,7 @@ class PrinterFan:
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
         self.kick_start_time = config.getfloat('kick_start_time', 0.1, minval=0.)
         self.off_below = config.getfloat('off_below', default=0., minval=0., maxval=1.)
-        ppins = self.printer.lookup_object('pins')
+        ppins = self.printer.lookup('pins')
         self.mcu_fan = ppins.setup_pin('pwm', config.get('pin'))
         self.mcu_fan.setup_max_duration(0.)
         cycle_time = config.getfloat('cycle_time', 0.010, above=0.)
@@ -159,7 +157,7 @@ class PrinterFan:
         self.mcu_fan.setup_start_value(0., max(0., min(self.max_power, shutdown_speed)))
         # Register commands
         if config.get_name() == 'fan':
-            gcode = self.printer.lookup_object('gcode')
+            gcode = self.printer.lookup('gcode')
             gcode.register_command("M106", self.cmd_M106)
             gcode.register_command("M107", self.cmd_M107)
     def handle_request_restart(self, print_time):
@@ -182,11 +180,11 @@ class PrinterFan:
     def get_status(self, eventtime):
         return {'speed': self.last_fan_value}
     def _delayed_set_speed(self, value):
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
         toolhead.register_lookahead_callback((lambda pt:self.set_speed(pt, value)))
     def cmd_M106(self, params):
         # Set fan speed
-        gcode = self.printer.lookup_object('gcode')
+        gcode = self.printer.lookup('gcode')
         value = gcode.get_float('S', params, 255., minval=0.) / 255.
         self._delayed_set_speed(value)
     def cmd_M107(self, params):
@@ -223,10 +221,10 @@ class ControllerFan:
         self.heater_name = config.get("heater", "extruder")
         self.last_on = self.idle_timeout
     def handle_ready(self):
-        pheater = self.printer.lookup_object('heater')
+        pheater = self.printer.lookup('heater')
         self.heaters = [pheater.lookup_heater(n.strip())
                         for n in self.heater_name.split(',')]
-        kin = self.printer.lookup_object('toolhead').get_kinematics()
+        kin = self.printer.lookup('toolhead').get_kinematics()
         self.stepper_names = [s.get_name() for s in kin.get_steppers()]
         reactor = self.printer.get_reactor()
         reactor.register_timer(self.callback, reactor.NOW)
@@ -271,7 +269,7 @@ class PrinterHeaterFan:
         self.mcu = self.fan.mcu_fan.get_mcu()
         self.fan_speed = config.getfloat("fan_speed", 1., minval=0., maxval=1.)
     def handle_ready(self):
-        pheater = self.printer.lookup_object('heater')
+        pheater = self.printer.lookup('heater')
         self.heaters = [pheater.lookup_heater(n.strip())
                         for n in self.heater_name.split(',')]
         reactor = self.printer.get_reactor()

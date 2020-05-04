@@ -53,7 +53,7 @@ struct pollreactor {
     struct pollreactor_timer *timers;
 };
 
-// Allocate a new 'struct pollreactor' object
+// Allocate a new 'struct pollreactor'
 static void
 pollreactor_setup(struct pollreactor *pr, int num_fds, int num_timers
                   , void *callback_data)
@@ -74,7 +74,7 @@ pollreactor_setup(struct pollreactor *pr, int num_fds, int num_timers
         pr->timers[i].waketime = PR_NEVER;
 }
 
-// Free resources associated with a 'struct pollreactor' object
+// Free resources associated with a 'struct pollreactor'
 static void
 pollreactor_free(struct pollreactor *pr)
 {
@@ -280,7 +280,7 @@ struct command_queue {
     struct list_node node;
 };
 
-// Allocate a 'struct queue_message' object
+// Allocate a 'struct queue_message'
 static struct queue_message *
 message_alloc(void)
 {
@@ -825,7 +825,7 @@ background_thread(void *data)
     return NULL;
 }
 
-// Create a new 'struct serialqueue' object
+// Create a new 'struct serialqueue'
 struct serialqueue * __visible
 serialqueue_alloc(int serial_fd, int write_only)
 {

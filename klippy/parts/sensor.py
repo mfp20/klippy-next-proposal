@@ -1,19 +1,18 @@
-# Sensors support base class.
-#
-# Each sensor have:
-# - "probe": the actual raw sensor, can be an MCU_* item (ex: endstops) or anything else (ex: thermometers)
-# - "value": the sensor raw value
-# - "read()": on some sensors (ex: endstops) triggers a "value" update and returns value, on polled sensors (ex: thermometers) it returns the last value
+# Sensors base class.
 #
 # Copyright (C) 2020    Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import part
+import logging
+from text import msg
+from error import KError as error
+import tree
+logger = logging.getLogger(__name__)
 
-class Object(part.Object):
-    def __init__(self,hal,node):
-        part.Object.__init__(self, hal, node)
+class Object(tree.Part):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.metaconf["type"] = {"t":"str"}
         # min operating temperature #TODO move in a better location, so that EVERY part have one of those
         self.metaconf["temp_min"] = {"t":"float", "default":-273.0}

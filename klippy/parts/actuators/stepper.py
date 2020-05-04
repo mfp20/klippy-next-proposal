@@ -1,15 +1,16 @@
-# Printer stepper support
+# Stepper motor support.
 #
 # Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
-# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging, math
-from messaging import msg
-from messaging import Kerr as error
-import chelper, homing
+from text import msg
+from error import KError as error
 from parts import actuator
+import chelper, homing
+logger = logging.getLogger(__name__)
 
 # Interface to low-level mcu and chelper code
 class MCU_stepper:
@@ -59,8 +60,10 @@ class MCU_stepper:
         second_last_step_time = self._dist_to_time(2. * self._step_dist, max_halt_velocity, max_accel)
         self._min_stop_interval = second_last_step_time - last_step_time
     def setup_itersolve(self, alloc_func, *params):
+        # python2 -> python3, mandatory encoding
+        rail = params[0].encode('ascii')
         ffi_main, ffi_lib = chelper.get_ffi()
-        sk = ffi_main.gc(getattr(ffi_lib, alloc_func)(*params), ffi_lib.free)
+        sk = ffi_main.gc(getattr(ffi_lib, alloc_func)(rail), ffi_lib.free)
         self.set_stepper_kinematics(sk)
     def _build_config(self):
         max_error = self._mcu.get_max_stepper_error()
@@ -218,7 +221,7 @@ class StepperEnableLine:
         return self.pin.is_dedicated
 
 #
-# Stepper object
+# Stepper
 #
 
 BUZZ_DISTANCE = 1.
@@ -232,8 +235,8 @@ ENDSTOP_SAMPLE_COUNT = 4
 class Dummy(actuator.Object):
     def __init__(self, hal, node):
         actuator.Object.__init__(self, hal, node)
-        logging.warning("(%s) stepper.Dummy", self.name)
-    def configure():
+        logger.warning("(%s) stepper.Dummy", self.name)
+    def _configure():
         if self.ready:
             return
         # TODO 
@@ -245,8 +248,8 @@ class Dummy(actuator.Object):
 # Managed steppers can be "force moved"; this breaks kinematics (ie: interrupt the print) 
 # and the stepper goes back to "manual stepper" state.
 class Object(actuator.Object):
-    def __init__(self, hal, node):
-        actuator.Object.__init__(self, hal, node)
+    def __init__(self, name, hal):
+        super().__init__(name, hal)
         self.metaconf["pin_step"] = {"t":"str"}
         self.metaconf["pin_dir"] = {"t":"str"}
         self.metaconf["pin_enable"] = {"t":"str", "default": None}
@@ -257,7 +260,7 @@ class Object(actuator.Object):
         self.metaconf["accel"] = {"t":"float", "default":0., "minval":0.}
         #
         self.pin = {}
-    def configure(self):
+    def _configure(self):
         if self.ready:
             return
         # move pins
@@ -276,7 +279,7 @@ class Object(actuator.Object):
         #force_move.register_stepper(mcu_stepper)
 
         # register part
-        self.hal.get_controller().register_part(self.node())
+        self.hal.get_controller().register_part(self)
         #
         self.ready = True
     # calculate a move's accel_t, cruise_t, and cruise_v
@@ -335,7 +338,7 @@ class Object(actuator.Object):
 
     # MANUAL_STEPPER
     def sync_print_time(self):
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
         print_time = toolhead.get_last_move_time()
         if self.next_cmd_time > print_time:
             toolhead.dwell(self.next_cmd_time - print_time)
@@ -343,7 +346,7 @@ class Object(actuator.Object):
             self.next_cmd_time = print_time
     def do_enable(self, enable):
         self.sync_print_time()
-        stepper_enable = self.printer.lookup_object('stepper_enable')
+        stepper_enable = self.printer.lookup('stepper_enable')
         if enable:
             for s in self.steppers:
                 se = stepper_enable.lookup_enable(s.get_name())
@@ -364,7 +367,7 @@ class Object(actuator.Object):
         self.next_cmd_time = self.next_cmd_time + accel_t + cruise_t + accel_t
         self.rail.generate_steps(self.next_cmd_time)
         self.trapq_free_moves(self.trapq, self.next_cmd_time + 99999.9)
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
         toolhead.note_kinematic_activity(self.next_cmd_time)
         if sync:
             self.sync_print_time()
@@ -407,9 +410,9 @@ class Object(actuator.Object):
             raise self.printer.config_error("Unknown stepper %s" % (name,))
         return self.steppers[name]
     def force_enable(self, stepper):
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
         print_time = toolhead.get_last_move_time()
-        stepper_enable = self.printer.lookup_object('stepper_enable')
+        stepper_enable = self.printer.lookup('stepper_enable')
         enable = stepper_enable.lookup_enable(stepper.get_name())
         was_enable = enable.is_motor_enabled()
         if not was_enable:
@@ -418,15 +421,15 @@ class Object(actuator.Object):
         return was_enable
     def restore_enable(self, stepper, was_enable):
         if not was_enable:
-            toolhead = self.printer.lookup_object('toolhead')
+            toolhead = self.printer.lookup('toolhead')
             toolhead.dwell(STALL_TIME)
             print_time = toolhead.get_last_move_time()
-            stepper_enable = self.printer.lookup_object('stepper_enable')
+            stepper_enable = self.printer.lookup('stepper_enable')
             enable = stepper_enable.lookup_enable(stepper.get_name())
             enable.motor_disable(print_time)
             toolhead.dwell(STALL_TIME)
     def move_force(self, stepper, dist, speed, accel=0.):
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
         toolhead.flush_step_generation()
         prev_sk = stepper.set_stepper_kinematics(self.stepper_kinematics)
         stepper.set_position((0., 0., 0.))
@@ -449,20 +452,23 @@ ATTRS = ("type", "step_distance")
 ATTRS_PINS = ("pin_step", "pin_dir", "pin_enable")
 ATTRS_I2C = ("pin_sda", "pin_scl", "addr")
 ATTRS_SPI = ("pin_miso", "pin_mosi", "pin_sck", "pin_cs")
-def load_node_object(hal, node):
-    if node.attrs_check():
-        if node.attrs["type"] == "pins":
-            if node.attrs_check("pins"):
-                node.object = Object(hal, node)
-                return node.object
-        elif node.attrs["type"] == "i2c":
+def load_node(name, hal, cparser):
+    node = None
+    #if node.attrs_check():
+    if 1:
+        typ = cparser.get(name, 'type')
+        if typ == "pins":
+            #if node.attrs_check("pins"):
+            node = Object(name, hal)
+            return node
+        elif typ == "i2c":
             if node.attrs_check("i2c"):
-                node.object = Object(hal, node)
-                return node.object
-        elif node.attrs["type"] == "spi":
+                node = Object(name, hal)
+                return node
+        elif typ == "spi":
             if node.attrs_check("spi"):
-                node.object = Object(hal, node)
-                return node.object
-    node.object = Dummy(hal,node)
-    return node.object
+                node = Object(name, hal)
+                return node
+    node = Dummy(name, hal)
+    return node
 

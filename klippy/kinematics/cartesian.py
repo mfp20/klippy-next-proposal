@@ -6,33 +6,37 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import logging
-import hw, composite, instrument
+from text import msg
+from error import KError as error
+import tree, hal, instrument
+logger = logging.getLogger(__name__)
+import util
 
-class Dummy(composite.Object):
-    def __init__(self, hal, node):
-        composite.Object.__init__(self,hal,node)
-        logging.warning("(%s) kinematics.Dummy", self.name)
-    def init(self):
+class Dummy(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
+        logging.warning("(%s) kinematics.Dummy", name)
+    def _init(self):
         self.ready = True
 
-class Object(composite.Object):
-    def __init__(self,hal,node):
-        composite.Object.__init__(self,hal,node)
-    def init(self):
+class Object(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
+    def _init(self):
         if self.ready:
             return
-        thnode = self.child_get_first("toolhead "+self.id())
-        toolhead = thnode.object
+        thnode = self.child_deep("toolhead "+self.id())
+        toolhead = thnode
         # setup rails
         self.dual_carriage_axis = None
         self.dual_carriage_rails = []
         railnodes = dict()
         for a in ["x", "y", "z"]:
             rr = list()
-            for r in thnode.attrs[a].split(","):
-                rr.append(thnode.child_get_first("rail "+r))
+            for r in getattr(thnode,'_'+a).split(","):
+                rr.append(thnode.child_deep("rail "+r))
             railnodes[a] = rr
-        self.rails = [railnodes["x"][0].object, railnodes["y"][0].object, railnodes["z"][0].object]
+        self.rails = [railnodes["x"][0], railnodes["y"][0], railnodes["z"][0]]
         for rail, axis in zip(self.rails, "xyz"):
             rail.setup_itersolve("cartesian_stepper_alloc", axis)
         for s in self.get_steppers():
@@ -40,8 +44,8 @@ class Object(composite.Object):
             toolhead.register_step_generator(s.generate_steps)
         # setup boundary checks
         self.max_velocity, self.max_accel = toolhead.get_max_velocity()
-        self.max_z_velocity = thnode.object._max_z_velocity
-        self.max_z_accel = thnode.object._max_z_accel
+        self.max_z_velocity = thnode._max_z_velocity
+        self.max_z_accel = thnode._max_z_accel
         self.limits = [(1.0, -1.0)] * 3
         # setup stepper max halt velocity
         self.max_halt_velocity = toolhead.get_max_axis_halt()
@@ -54,7 +58,7 @@ class Object(composite.Object):
             dc_axis = self._dual-cart
         if dc_axis:
             self.dual_carriage_axis = {'x': 0, 'y': 1}[dc_axis]
-            dc_rail = railnodes[dc_axis][1].object
+            dc_rail = railnodes[dc_axis][1]
             # setup dual stepper
             dc_rail.setup_itersolve('cartesian_stepper_alloc', dc_axis)
             for s in dc_rail.get_steppers():
@@ -156,41 +160,44 @@ class Object(composite.Object):
         self._activate_carriage(carriage)
         gcode.reset_last_position()
 
-def load_tree_node(hal, knode, parts):
+def build_toolhead(hal, knode, thnode, cparser, parts):
     used_parts = set()
-    thnode = knode.child_get_first("toolhead ")
-    for a in thnode.attrs:
+    for a in cparser.options(thnode.name()):
         if a == "x":
-            for r in thnode.attrs[a].split(","):
+            o = cparser.get(thnode.name(), a)
+            thnode._meta_add('_x', o)
+            for r in o.split(","):
                 if "rail "+r in parts:
-                    thnode.children[parts["rail "+r].name] = parts["rail "+r]
+                    thnode.child_add(parts["rail "+r])
                     used_parts.add("rail "+r)
-            if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dual-cart"] = a
+            if len(cparser.get(thnode.name(), a).split(",")) > 1:
+                #knode.attrs["dual-cart"] = a
+                pass
         elif a == "y":
-            for r in thnode.attrs[a].split(","):
+            o = cparser.get(thnode.name(), a)
+            thnode._meta_add('_y', o)
+            for r in o.split(","):
                 if "rail "+r in parts:
-                    thnode.children[parts["rail "+r].name] = parts["rail "+r]
+                    thnode.child_add(parts["rail "+r])
                     used_parts.add("rail "+r)
-            if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dual-cart"] = a
+            if len(cparser.get(thnode.name(), a).split(",")) > 1:
+                #knode.attrs["dual-cart"] = a
+                pass
         elif a == "z":
-            for r in thnode.attrs[a].split(","):
+            o = cparser.get(thnode.name(), a)
+            thnode._meta_add('_z', o)
+            for r in o.split(","):
                 if "rail "+r in parts:
-                    thnode.children[parts["rail "+r].name] = parts["rail "+r]
+                    thnode.child_add(parts["rail "+r])
                     used_parts.add("rail "+r)
-            if len(thnode.attrs[a].split(",")) > 1:
-                knode.attrs["dual-cart"] = a
+            if len(cparser.get(thnode.name(), a).split(",")) > 1:
+                #knode.attrs["dual-cart"] = a
+                pass
         elif a in hal.pgroups or a in hal.cgroups:
-            for p in thnode.attrs[a].split(","):
-                thnode.children[parts[a+" "+p].name] = parts[a+" "+p]
+            for p in cparser.get(thnode.name(), a).split(","):
+                thnode.child_add(parts[a+" "+p])
     return used_parts
 
-ATTRS = ("type",)
-def load_node_object(hal, node):
-    if node.attrs_check():
-        node.object = Object(hal, node)
-    else:
-        node.object = Dummy(hal,node)
-    return node.object
+def load_node(name, hal, cparser):
+    return Object(name, hal)
 

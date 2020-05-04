@@ -244,7 +244,7 @@ class MessageParser:
         msgcrc = s[msglen-MESSAGE_TRAILER_CRC:msglen-MESSAGE_TRAILER_CRC+2]
         crc = crc16_ccitt(s[:msglen-MESSAGE_TRAILER_SIZE])
         if crc != msgcrc:
-            #logging.debug("got crc %s vs %s", repr(crc), repr(msgcrc))
+            #logger.debug("got crc %s vs %s", repr(crc), repr(msgcrc))
             return -1
         return msglen
     def dump(self, s):
@@ -325,14 +325,14 @@ class MessageParser:
         except error as e:
             raise
         except:
-            #logging.exception("Unable to extract params")
+            #logger.exception("Unable to extract params")
             raise error("Unable to extract params from: %s" % (msgname,))
         try:
             cmd = mp.encode_by_name(**argparts)
         except error as e:
             raise
         except:
-            #logging.exception("Unable to encode")
+            #logger.exception("Unable to encode")
             raise error("Unable to encode: %s" % (msgname,))
         return cmd
     def _fill_enumerations(self, enumerations):
@@ -383,7 +383,7 @@ class MessageParser:
         except error as e:
             raise
         except Exception as e:
-            logging.exception("process_identify error")
+            logger.exception("process_identify error")
             raise error("Error during identify: %s" % (str(e),))
     def get_enumerations(self):
         return dict(self.enumerations)

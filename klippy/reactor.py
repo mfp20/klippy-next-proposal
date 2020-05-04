@@ -1,340 +1,272 @@
-# File descriptor and timer event helper
+# Timers and callbacks
 #
 # Copyright (C) 2016-2019  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import greenlet, Queue, os, select, math, time
-import part, chelper, util
+import logging, sys, time, multiprocessing, concurrent.futures, random
+from text import msg
+from error import KError as error
+import process, tree, chelper
+logger = logging.getLogger(__name__)
 
 _NOW = 0.
 _NEVER = 9999999999999999.
 
-class ReactorTimer:
-    def __init__(self, callback, waketime):
-        self.callback = callback
-        self.waketime = waketime
+#
+# Multiprocessing version (ie: cpu cores > 3)
+#
 
-class ReactorCompletion:
-    class sentinel: pass
-    def __init__(self, hal):
-        self.hal = hal
-        self.result = self.sentinel
-        self.waiting = []
-    def test(self):
-        return self.result is not self.sentinel
-    def complete(self, result):
-        self.result = result
-        for wait in self.waiting:
-            self.hal.get_reactor().update_timer(wait.timer, self.hal.get_reactor().NOW)
-    def wait(self, waketime=_NEVER, waketime_result=None):
-        if self.result is self.sentinel:
-            wait = greenlet.getcurrent()
-            self.waiting.append(wait)
-            self.hal.get_reactor().pause(waketime)
-            self.waiting.remove(wait)
-            if self.result is self.sentinel:
-                return waketime_result
+class ProcessTimer:
+    def __init__(self, ident, waketime, callback = None):
+        self.id = ident
+        self.waketime = waketime
+        self.callback = callback
+
+class ProcessCompletion:
+    "A concurrent.futures.Future wrapped with helper methods."
+    def __init__(self, future = None, subcompletions = None):
+        self.future = future
+        if subcompletions:
+            self.subs = [c.future for c in subcompletions]
+        else:
+            self.subs = None
+        self.result = None
+    def isdone(self):
+        "Return True if we have a result."
+        if self.result:
+            return True
+        else:
+            if self.future:
+                return self.future.done()
+            else:
+                return False
+    def result(self, timeout = None):
+        "Try to get a result."
+        if not isdone():
+            if self.subs:
+                done, not_done = concurrent.futures.wait(self.subs, timeout, FIRST_COMPLETED)
+                if len(done) == len(self.subs):
+                    self.result = done
+                    return self.result
+            else:
+                done, not_done = concurrent.futures.wait([self.future], timeout, ALL_COMPLETED)
+                if len(done) > 0:
+                    self.result = done[0]
+                    return self.result
+        return None
+    def wait(self, timeout = None):
+        "Wait for a result."
+        if self.subs:
+            self.result, not_done = concurrent.futures.wait(self.subs, timeout, ALL_COMPLETED)
+        else:
+            self.result = self.future.result(timeout)
         return self.result
 
-class ReactorCallback:
-    def __init__(self, hal, callback, waketime):
-        self.hal = hal
-        self.timer = self.hal.get_reactor().register_timer(self.invoke, waketime)
+class ProcessCallback:
+    "4-modes callback: manual invoke, scheduled invoke, async (ie: run now, get result later), async-multi (ie: wait for multiple completions to complete before setting the result)."
+    def __init__(self, callback, timer = None, asyn = False, subcompletions = None):
         self.callback = callback
-        self.completion = ReactorCompletion(self.hal)
+        #
+        self.timer = timer
+        if timer:
+            self.timer.callback = self.invoke
+        #
+        if asyn:
+            if subcompletions:
+                self.completion = ProcessCompletion(None, subcompletions)
+            else:
+                self.completion = ProcessCompletion(None)
     def invoke(self, eventtime):
-        self.hal.get_reactor().unregister_timer(self.timer)
-        res = self.callback(eventtime)
-        self.completion.complete(res)
-        return self.hal.get_reactor().NEVER
-
-class ReactorFileHandler:
-    def __init__(self, fd, callback):
-        self.fd = fd
-        self.callback = callback
-    def fileno(self):
-        return self.fd
-
-class ReactorGreenlet(greenlet.greenlet):
-    def __init__(self, run):
-        greenlet.greenlet.__init__(self, run=run)
-        self.timer = None
-
-class ReactorMutex:
-    def __init__(self, hal, is_locked):
-        self.hal = hal
-        self.is_locked = is_locked
-        self.next_pending = False
-        self.queue = []
-        self.lock = self.__enter__
-        self.unlock = self.__exit__
-    def test(self):
-        return self.is_locked
-    def __enter__(self):
-        if not self.is_locked:
-            self.is_locked = True
-            return
-        g = greenlet.getcurrent()
-        self.queue.append(g)
-        while 1:
-            self.hal.get_reactor().pause(self.hal.get_reactor().NEVER)
-            if self.next_pending and self.queue[0] is g:
-                self.next_pending = False
-                self.queue.pop(0)
-                return
-    def __exit__(self, type=None, value=None, tb=None):
-        if not self.queue:
-            self.is_locked = False
-            return
-        self.next_pending = True
-        self.hal.get_reactor().update_timer(self.queue[0].timer, self.hal.get_reactor().NOW)
-
-class Select(part.Object):
-    NOW = _NOW
+        "Invoke callback on timer trigger."
+        self.callback(eventtime)
+        return _NEVER
+    def wait(self, timeout = None):
+        "Wait for result of an async callback."
+        return self.completion.wait(timeout)
+    def result(self):
+        "Return the current result."
+        return self.completion.result
+            
+class Process(process.Base, tree.Part):
+    "Multiprocessing reactor."
     NEVER = _NEVER
-    def __init__(self, hal, node):
-        part.Object.__init__(self,hal,node)
-        # Main code
-        self._process = False
-        self.monotonic = chelper.get_ffi()[1].get_monotonic
-        # Timers
+    def __init__(self, name, starttime = _NEVER, verbose = False):
+        process.Base.__init__(self, name)
+        tree.Part.__init__(self, name)
+        # scheduled timers (note: copied on fork/spawn, local copy have callbacks)
         self._timers = []
-        self._next_timer = self.NEVER
-        # Callbacks
-        self._pipe_fds = None
-        self._async_queue = Queue.Queue()
-        # File descriptors
-        self._fds = []
-        # Greenlets
-        self._g_dispatch = None
-        self._greenlets = []
+        # start scheduler
+        process.worker_start(self, (self._subpipe,starttime,verbose))
+        # async workers (note: not in the timers context)
+        self._async = concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()-3)
+        if verbose:
+            timer = self.timer(None, self.monotonic(), self._print_overhead)
+            self.timer_add(timer)
         self.ready = True
-    # Timers
-    def update_timer(self, timer_handler, waketime):
-        timer_handler.waketime = waketime
-        self._next_timer = min(self._next_timer, waketime)
-    def register_timer(self, callback, waketime=NEVER):
-        timer_handler = ReactorTimer(callback, waketime)
-        timers = list(self._timers)
-        timers.append(timer_handler)
-        self._timers = timers
-        self._next_timer = min(self._next_timer, waketime)
-        return timer_handler
-    def unregister_timer(self, timer_handler):
-        timer_handler.waketime = self.NEVER
-        timers = list(self._timers)
-        timers.pop(timers.index(timer_handler))
-        self._timers = timers
+    def __getstate__(self):
+        "Removes unpickle-ables."
+        # TODO
+        state = self.__dict__.copy()
+        del state['monotonic']
+        del state['_timers']
+        del state['_pipe']
+        del state['_async']
+        return state
+    def __setstate__(self, state):
+        "Set back unpickle-ables."
+        # TODO
+        self.__dict__.update(state)
+        self.monotonic = chelper.get_ffi()[1].get_monotonic
+        self._timers = []
+        self._pipe, subpipe = multiprocessing.Pipe()
+        process.worker_start(self, (subpipe,_NEVER))
+        self._async = concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count())
+    def _show_details(self, indent = 0):
+        "Return formatted details about reactor node."
+        txt = "\t"*(indent+1) + "--------------------- (timers)\n"
+        for t in sorted(self._timers):
+            txt = txt + '\t' * (indent+1) + "- " + str(t.id).ljust(20, " ") + str(t.waketime).ljust(20, " ") + str(t.callback).ljust(20, " ") + "\n"
+        return txt
+    def _print_overhead(self, eventtime):
+        "Print reactor overhead for debugging purposes."
+        oh = (self.monotonic()-eventtime)
+        logger.debug("--- reactor: timers %d, overhead %1.3fms ---", len(self._timers), oh*1000)
+        # the more overhead, the more debug messages
+        return eventtime+((1/oh)/1000)
     def _check_timers(self, eventtime):
+        "Trigger expired timers and set next wakeup time."
         if eventtime < self._next_timer:
             return min(1., max(.001, self._next_timer - eventtime))
-        self._next_timer = self.NEVER
-        g_dispatch = self._g_dispatch
+        self._next_timer = _NEVER
         for t in self._timers:
             waketime = t.waketime
             if eventtime >= waketime:
-                t.waketime = self.NEVER
-                t.waketime = waketime = t.callback(eventtime)
-                if g_dispatch is not self._g_dispatch:
-                    self._next_timer = min(self._next_timer, waketime)
-                    self._end_greenlet(g_dispatch)
-                    return 0.
+                t.waketime = waketime = _NEVER
+                self._subpipe.send({'todo':t.id, 'eventtime':eventtime})
+            # update next wakeup time
             self._next_timer = min(self._next_timer, waketime)
         if eventtime >= self._next_timer:
             return 0.
         return min(1., max(.001, self._next_timer - self.monotonic()))
-    # Callbacks and Completions
-    def completion(self):
-        return ReactorCompletion(self.hal)
-    def register_callback(self, callback, waketime=NOW):
-        rcb = ReactorCallback(self.hal, callback, waketime)
-        return rcb.completion
-    # Return a completion that completes when all completions in a list complete
-    def completion_multi(completions):
-        if len(completions) == 1:
-            return completions[0]
-        cb = (lambda e: all([c.wait() for c in completions]))
-        return self.register_callback(cb)
-    # Asynchronous (from another thread) callbacks and completions
-    def register_async_callback(self, callback, waketime=NOW):
-        self._async_queue.put_nowait(
-            (ReactorCallback, (self.hal, callback, waketime)))
-        try:
-            os.write(self._pipe_fds[1], '.')
-        except os.error:
-            pass
-    def async_complete(self, completion, result):
-        self._async_queue.put_nowait((completion.complete, (result,)))
-        try:
-            os.write(self._pipe_fds[1], '.')
-        except os.error:
-            pass
-    def _got_pipe_signal(self, eventtime):
-        try:
-            os.read(self._pipe_fds[0], 4096)
-        except os.error:
-            pass
-        while 1:
-            try:
-                func, args = self._async_queue.get_nowait()
-            except Queue.Empty:
-                break
-            func(*args)
-    def _setup_async_callbacks(self):
-        self._pipe_fds = os.pipe()
-        util.set_nonblock(self._pipe_fds[0])
-        util.set_nonblock(self._pipe_fds[1])
-        self.register_fd(self._pipe_fds[0], self._got_pipe_signal)
-    def __del__(self):
-        if self._pipe_fds is not None:
-            os.close(self._pipe_fds[0])
-            os.close(self._pipe_fds[1])
-            self._pipe_fds = None
-    # Greenlets
-    def _sys_pause(self, waketime):
-        # Pause using system sleep for when reactor not running
+    def _dispatch(self, eventtime, obj):
+        "Dispatch an incoming command accordingly."
+        if 'showth' in obj:
+            self._subpipe.send({'showth':self._showth(), 'eventtime':eventtime})
+        elif 'timer' in obj:
+            self._timers.append(obj['timer'])
+            self._next_timer = min(self._next_timer, obj['timer'].waketime)
+        elif 'pause' in obj:
+            delay = obj['pause'] - self.monotonic()
+            if delay > 0.:
+                time.sleep(delay)
+        elif 'update' in obj:
+            self._timers[obj['update']].waketime = obj['waketime']
+            self._next_timer = min(self._next_timer, obj['waketime'])
+        elif 'remove' in obj:
+            self._timers.pop(obj['remove'])
+        else:
+            raise error("Unknown message: %s", obj)
+    def _runner(self, *args):
+        "Process runner. Reactor Scheduler."
+        self._subpipe = args[0]
+        self.message = {}
+        self._next_timer = args[1]
+        while self._running.is_set():
+            # emit timestamp
+            eventtime = self.monotonic()
+            # check timers
+            timeout = self._check_timers(eventtime)
+            # poll pipe for new messages
+            if self._subpipe.poll(timeout):
+                self._dispatch(eventtime, self._subpipe.recv())
+    # reactor
+    def pause(self, waketime):
+        self.send({'pause':waketime})
         delay = waketime - self.monotonic()
         if delay > 0.:
             time.sleep(delay)
-        return self.monotonic()
-    def pause(self, waketime):
-        g = greenlet.getcurrent()
-        if g is not self._g_dispatch:
-            if self._g_dispatch is None:
-                return self._sys_pause(waketime)
-            # Switch to _check_timers (via g.timer.callback return)
-            return self._g_dispatch.switch(waketime)
-        # Pausing the dispatch greenlet - prepare a new greenlet to do dispatch
-        if self._greenlets:
-            g_next = self._greenlets.pop()
-        else:
-            g_next = ReactorGreenlet(run=self._dispatch_loop)
-        g_next.parent = g.parent
-        g.timer = self.register_timer(g.switch, waketime)
-        self._next_timer = self.NOW
-        # Switch to _dispatch_loop (via _end_greenlet or direct)
-        eventtime = g_next.switch()
-        # This greenlet activated from g.timer.callback (via _check_timers)
-        return eventtime
-    def _end_greenlet(self, g_old):
-        # Cache this greenlet for later use
-        self._greenlets.append(g_old)
-        self.unregister_timer(g_old.timer)
-        g_old.timer = None
-        # Switch to _check_timers (via g_old.timer.callback return)
-        self._g_dispatch.switch(self.NEVER)
-        # This greenlet reactivated from pause() - return to main dispatch loop
-        self._g_dispatch = g_old
-    # Mutexes
-    def mutex(self, is_locked=False):
-        return ReactorMutex(self.hal, is_locked)
-    # File descriptors
-    def register_fd(self, fd, callback):
-        file_handler = ReactorFileHandler(fd, callback)
-        self._fds.append(file_handler)
-        return file_handler
-    def unregister_fd(self, file_handler):
-        self._fds.pop(self._fds.index(file_handler))
-    # Main loop
-    def _dispatch_loop(self):
-        self._g_dispatch = g_dispatch = greenlet.getcurrent()
-        eventtime = self.monotonic()
-        while self._process:
-            timeout = self._check_timers(eventtime)
-            res = select.select(self._fds, [], [], timeout)
-            eventtime = self.monotonic()
-            for fd in res[0]:
-                fd.callback(eventtime)
-                if g_dispatch is not self._g_dispatch:
-                    self._end_greenlet(g_dispatch)
-                    eventtime = self.monotonic()
-                    break
-        self._g_dispatch = None
-    def run(self):
-        if self._pipe_fds is None:
-            self._setup_async_callbacks()
-        self._process = True
-        g_next = ReactorGreenlet(run=self._dispatch_loop)
-        g_next.switch()
-    def end(self):
-        self._process = False
-    def cleanup(self):
-        if self._process:
-            self._process = False
+    #
+    # timers
+    def timer(self, ident = None, waketime = None, callback = None):
+        "Create a new event timer."
+        if not ident:
+            ident = len(self._timers)
+        if not waketime:
+            waketime = _NEVER
+        return ProcessTimer(ident, waketime, callback)
+    def timer_add(self, timer):
+        "Schedule an event."
+        # remove callback (to make it pickle-able)
+        cb = timer.callback
+        timer.callback = None
+        # send new timer to reactor process
+        self.send({'timer':timer})
+        # set callback and register
+        timer.callback = cb
+        self._timers.append(timer)
+        return timer
+    def timer_register(self, func):
+        return self.timer_add(self.timer(None, None, func))
+    def timer_update(self, timer_handler, waketime):
+        "Update event waketime."
+        self.send({'update':timer_handler.id, 'waketime':waketime})
+        timer_handler.waketime = waketime
+    def timer_cancel(self, timer_handler):
+        "Cancel an event."
+        self.send({'remove':timer_handler.id})
+        self._timers.pop(timer_handler.id)
+    # callbacks
+    def callback(self, callback, waketime = _NOW):
+        "Schedule a callback event."
+        timer = ProcessTimer(len(self._timers), waketime)
+        cb = ProcessCallback(callback, timer)
+        self.timer_add(timer)
+        return cb
+    def callback_async(self, callback):
+        "Run an async callback."
+        cb = ProcessCallback(callback, None, True)
+        cb.completion.future = self._async.submit(cb.callback, self.monotonic(), None)
+        cb.completion.future.add_done_callback(cb.completion.wait)
+        return cb.completion
+    def callback_multi(self, completions, callback = None):
+        "Return a completion that completes when all completions in the given list complete."
+        cb = ProcessCallback(None, None, True, completions)
+        cb.completion.future = self._async.submit(cb.completion.wait, None, None)
+        # if callback exist, call on completion
+        if callback:
+            cb.completion.future.add_done_callback(callback)
+        return cb.completion
+        
+#
+# Co-routine (greenlet) version (ie: cpu cores < 3)
+#
 
-class Poll(Select):
-    def __init__(self, hal, node):
-        Select.__init__(self, hal, node)
-        self._poll = select.poll()
-        self._fds = {}
-    # File descriptors
-    def register_fd(self, fd, callback):
-        file_handler = ReactorFileHandler(fd, callback)
-        fds = self._fds.copy()
-        fds[fd] = callback
-        self._fds = fds
-        self._poll.register(file_handler, select.POLLIN | select.POLLHUP)
-        return file_handler
-    def unregister_fd(self, file_handler):
-        self._poll.unregister(file_handler)
-        fds = self._fds.copy()
-        del fds[file_handler.fd]
-        self._fds = fds
-    # Main loop
-    def _dispatch_loop(self):
-        self._g_dispatch = g_dispatch = greenlet.getcurrent()
-        eventtime = self.monotonic()
-        while self._process:
-            timeout = self._check_timers(eventtime)
-            res = self._poll.poll(int(math.ceil(timeout * 1000.)))
-            eventtime = self.monotonic()
-            for fd, event in res:
-                self._fds[fd](eventtime)
-                if g_dispatch is not self._g_dispatch:
-                    self._end_greenlet(g_dispatch)
-                    eventtime = self.monotonic()
-                    break
-        self._g_dispatch = None
+# NOTE: need to test multiprocessing on single core cpu first.
+# If older single-core boards (ex: Rpi 0-2) die for too many context switches, 
+# paste here pristine old reactor and adapt it to have the same class fingerprint.
 
-class EPollReactor(Select):
-    def __init__(self):
-        Select.__init__(self, hal, node)
-        self._epoll = select.epoll()
-        self._fds = {}
-    # File descriptors
-    def register_fd(self, fd, callback):
-        file_handler = ReactorFileHandler(fd, callback)
-        fds = self._fds.copy()
-        fds[fd] = callback
-        self._fds = fds
-        self._epoll.register(fd, select.EPOLLIN | select.EPOLLHUP)
-        return file_handler
-    def unregister_fd(self, file_handler):
-        self._epoll.unregister(file_handler.fd)
-        fds = self._fds.copy()
-        del fds[file_handler.fd]
-        self._fds = fds
-    # Main loop
-    def _dispatch_loop(self):
-        self._g_dispatch = g_dispatch = greenlet.getcurrent()
-        eventtime = self.monotonic()
-        while self._process:
-            timeout = self._check_timers(eventtime)
-            res = self._epoll.poll(timeout)
-            eventtime = self.monotonic()
-            for fd, event in res:
-                self._fds[fd](eventtime)
-                if g_dispatch is not self._g_dispatch:
-                    self._end_greenlet(g_dispatch)
-                    eventtime = self.monotonic()
-                    break
-        self._g_dispatch = None
+# single process, fallback in case poll method isn't available
+class GreenSelect:
+    # TODO
+    pass
 
-# Use the poll based reactor if it is available
-try:
-    select.poll
-    Reactor = Poll
-except:
-    Reactor = Select
+# single process, single thread reactor
+class GreenPoll(GreenSelect):
+    # TODO
+    pass
+
+def make(name, single, verbose):
+    # Use multiprocessing if cpu cores > 3 and not forced to single process
+    if multiprocessing.cpu_count() > 3 and not single:
+        return Process(name, _NEVER, verbose)
+    else:
+        # Use the poll based reactor if it is available
+        try:
+            select.poll
+            Reactor = GreenPoll
+        except:
+            Reactor = GreenSelect
+        return Reactor()
 

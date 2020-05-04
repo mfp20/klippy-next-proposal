@@ -15,8 +15,8 @@ PIN_MIN_TIME = 0.100
 class Dummy(actuator.Object):
     def __init__(self, hal, node):
         part.Object.__init__(self, hal, node)
-        logging.warning("(%s) servo.Dummy", self.name)
-    def configure():
+        logger.warning("(%s) servo.Dummy", self.name)
+    def _configure():
         if self.ready:
             return
         # TODO 
@@ -28,7 +28,7 @@ class Object(actuator.Object):
         part.Object.__init__(self, hal, node)
         #
         self.printer = config.get_printer()
-        ppins = self.printer.lookup_object('pins')
+        ppins = self.printer.lookup('pins')
         self.mcu_servo = ppins.setup_pin('pwm', config.get('pin'))
         self.mcu_servo.setup_max_duration(0.)
         self.mcu_servo.setup_cycle_time(SERVO_SIGNAL_PERIOD)
@@ -44,7 +44,7 @@ class Object(actuator.Object):
         self.enable = config.getboolean('enable', True)
         self.last_enable = not self.enable
         servo_name = config.get_name().split()[1]
-        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode = self.printer.lookup('gcode')
         self.gcode.register_mux_command("SET_SERVO", "SERVO", servo_name,
                                         self.cmd_SET_SERVO,
                                         desc=self.cmd_SET_SERVO_help)
@@ -65,7 +65,7 @@ class Object(actuator.Object):
         self.printer.event_register_handler("klippy:ready", self.handle_ready)
     def handle_ready(self):
         if self.initial_pwm_value is not None:
-            toolhead = self.printer.lookup_object('toolhead')
+            toolhead = self.printer.lookup('toolhead')
             print_time = toolhead.get_last_move_time()
             self._set_pwm(print_time, self.initial_pwm_value)
     def get_status(self, eventtime):
@@ -90,7 +90,7 @@ class Object(actuator.Object):
         return width * self.width_to_value
     cmd_SET_SERVO_help = "Set servo angle"
     def cmd_SET_SERVO(self, params):
-        print_time = self.printer.lookup_object('toolhead').get_last_move_time()
+        print_time = self.printer.lookup('toolhead').get_last_move_time()
         if 'ENABLE' in params:
             value = self.gcode.get_int('ENABLE', params)
             self.enable = value != 0
@@ -108,10 +108,10 @@ def load_config_prefix(config):
     return PrinterServo(config)
 
 ATTRS = ("type", "pin",)
-def load_node_object(hal, node):
+def load_node(hal, node):
     if node.attrs_check():
-        node.object = Object(hal, node)
+        node = Object(hal, node)
     else:
-        node.object = Dummy(hal,node)
-    return node.object
+        node = Dummy(hal,node)
+    return node
 

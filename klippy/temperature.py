@@ -1,13 +1,15 @@
 # Printer heat controller, sensors and heaters lookup
 #
 # Copyright (C) 2016-2018  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging
-from messaging import msg
-from messaging import Kerr as error
-import part, governor
+import logging, sys
+from text import msg
+from error import KError as error
+import tree, governor
+logger = logging.getLogger(__name__)
 
 #
 # Verifier: periodical temperature checks
@@ -39,9 +41,9 @@ class Verifier:
         if self.printer.get_args().get('output_debug') is not None:
             # Disable verify_heater if outputting to a debug file
             return
-        pheater = self.printer.lookup_object('heater')
+        pheater = self.printer.lookup('heater')
         self.heater = pheater.lookup_heater(self.heater_name)
-        logging.info("Starting heater checks for %s", self.heater_name)
+        logger.info("Starting heater checks for %s", self.heater_name)
         reactor = self.printer.get_reactor()
         self.check_timer = reactor.register_timer(self.check_event, reactor.NOW)
     def _event_handle_shutdown(self):
@@ -53,7 +55,7 @@ class Verifier:
         if temp >= target - self.hysteresis or target <= 0.:
             # Temperature near target - reset checks
             if self.approaching_target and target:
-                logging.info("Heater %s within range of %.3f",
+                logger.info("Heater %s within range of %.3f",
                              self.heater_name, target)
             self.approaching_target = self.starting_approach = False
             if temp <= target + self.hysteresis:
@@ -64,7 +66,7 @@ class Verifier:
         if not self.approaching_target:
             if target != self.last_target:
                 # Target changed - reset checks
-                logging.info("Heater %s approaching new target of %.3f",
+                logger.info("Heater %s approaching new target of %.3f",
                              self.heater_name, target)
                 self.approaching_target = self.starting_approach = True
                 self.goal_temp = temp + self.heating_gain
@@ -81,7 +83,7 @@ class Verifier:
         elif eventtime >= self.goal_systime:
             # Temperature is no longer approaching target
             self.approaching_target = False
-            logging.info("Heater %s no longer approaching target %.3f",
+            logger.info("Heater %s no longer approaching target %.3f",
                          self.heater_name, target)
         elif self.starting_approach:
             self.goal_temp = min(self.goal_temp, temp + self.heating_gain)
@@ -89,7 +91,7 @@ class Verifier:
         return eventtime + 1.
     def heater_fault(self):
         msg = "Heater %s not heating at expected rate" % (self.heater_name,)
-        logging.error(msg)
+        logger.error(msg)
         self.printer.call_shutdown(msg + HINT_THERMAL)
         return self.printer.get_reactor().NEVER
 
@@ -100,19 +102,19 @@ class Verifier:
 class PIDCalibrate:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode = self.printer.lookup('gcode')
         self.gcode.register_command('PID_CALIBRATE', self.cmd_PID_CALIBRATE, desc=self.cmd_PID_CALIBRATE_help)
     cmd_PID_CALIBRATE_help = "Run PID calibration test"
     def cmd_PID_CALIBRATE(self, params):
         heater_name = self.gcode.get_str('HEATER', params)
         target = self.gcode.get_float('TARGET', params)
         write_file = self.gcode.get_int('WRITE_FILE', params, 0)
-        pheater = self.printer.lookup_object('heater')
+        pheater = self.printer.lookup('heater')
         try:
             heater = pheater.lookup_heater(heater_name)
         except self.printer.config_error as e:
             raise self.gcode.error(str(e))
-        self.printer.lookup_object('toolhead').get_last_move_time()
+        self.printer.lookup('toolhead').get_last_move_time()
         calibrate = ControlAutoTune(heater, target)
         old_control = heater.set_control(calibrate)
         try:
@@ -126,43 +128,46 @@ class PIDCalibrate:
             calibrate.write_file('/tmp/heattest.txt')
         # Log and report results
         Kp, Ki, Kd = calibrate.calc_final_pid()
-        logging.info("Autotune: final: Kp=%f Ki=%f Kd=%f", Kp, Ki, Kd)
+        logger.info("Autotune: final: Kp=%f Ki=%f Kd=%f", Kp, Ki, Kd)
         self.gcode.respond_info(
             "PID parameters: pid_Kp=%.3f pid_Ki=%.3f pid_Kd=%.3f\n"
             "The SAVE_CONFIG command will update the printer config file\n"
             "with these parameters and restart the printer." % (Kp, Ki, Kd))
         # Store results for SAVE_CONFIG
-        configfile = self.printer.lookup_object('configfile')
+        configfile = self.printer.lookup('configfile')
         configfile.set(heater_name, 'control', 'pid')
         configfile.set(heater_name, 'pid_Kp', "%.3f" % (Kp,))
         configfile.set(heater_name, 'pid_Ki', "%.3f" % (Ki,))
         configfile.set(heater_name, 'pid_Kd', "%.3f" % (Kd,))
 
 '''
-logging.info(temperature.sensor_factories)
+logger.info(temperature.sensor_factories)
 INFO:root:{'NTC 100K beta 3950': <function <lambda> at 0x70751013a150>, 'Honeywell 100K 135-104LAG-J01': <function <lambda> at 0x70751011ac50>, 'NTC 100K MGB18-104F39050L32': <function <lambda> at 0x70750feb6a50>, 'PT100 INA826': <function <lambda> at 0x70750feb6dd0>, 'ATC Semitec 104GT-2': <function <lambda> at 0x70751011ae50>, 'MAX31855': <class extras.spi_temperature.MAX31855 at 0x70750fec4360>, 'MAX31856': <class extras.spi_temperature.MAX31856 at 0x70750fec42f0>, 'AD8496': <function <lambda> at 0x70750feb6cd0>, 'AD8497': <function <lambda> at 0x70750feb6d50>, 'AD8494': <function <lambda> at 0x70750feb6bd0>, 'AD8495': <function <lambda> at 0x70750feb6c50>, 'MAX31865': <class extras.spi_temperature.MAX31865 at 0x70750fec4440>, 'EPCOS 100K B57560G104F': <function <lambda> at 0x70750feb6ad0>, 'PT1000': <function <lambda> at 0x70750feb6e50>, 'AD595': <function <lambda> at 0x70750feb6b50>, 'BME280': <class extras.bme280.BME280 at 0x70750fec4590>, 'MAX6675': <class extras.spi_temperature.MAX6675 at 0x70750fec43d0>}
 
-logging.info(temperature.heaters)
+logger.info(temperature.heaters)
 INFO:root:{'heater_bed': <heater.Heater instance at 0x70750fecb230>, 'extruder': <heater.Heater instance at 0x70750f8afd70>}
 
-logging.info(temperature.gcode_id_to_sensor)
+logger.info(temperature.gcode_id_to_sensor)
 INFO:root:{'B': <heater.Heater instance at 0x70750fecb230>, 'T0': <heater.Heater instance at 0x70750f8afd70>}
 
-logging.info(temperature.available_heaters)
+logger.info(temperature.available_heaters)
 INFO:root:['heater_bed', 'extruder']
 
-logging.info(temperature.available_sensors)
+logger.info(temperature.available_sensors)
 INFO:root:['heater_bed', 'extruder']
 '''
 
-class Manager(part.Object):
-    def __init__(self, hal, node):
-        part.Object.__init__(self, hal, node)
+class Manager(tree.Part):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.govoff = governor.AlwaysOff()
         self.govon = governor.AlwaysOn()
         self.tcontroller = {}
         self.ready = True
         #self.printer.try_load_module(config, "verify_heater %s" % (self.name,))
+    def _show_details(self, indent = 0):
+        "Return formatted details about temperature controller node."
+        return ""
     def register(self):
         self.hal.get_printer().event_register_handler("commander:request_restart", self._event_handler_off_all_actuators)
     # handlers
@@ -189,14 +194,14 @@ class Manager(part.Object):
             return
         # register
         if gcode:
-            self.tcontroller[gcode] = tc.object
+            self.tcontroller[gcode] = tc
             # TODO register commands
         else:
             if tc.name == None:
                 raise error("Can't register temperature controller.")
             if tc.name in self.tcontroller:
                 raise error("Temperature controller '%s' already registered" % (tc.name,))
-            self.tcontroller[tc.name] = tc.object
+            self.tcontroller[tc.name] = tc
     def get_tc(self, name):
         return self.tcontroller[name]
     def get_current_temp(tcname, sensorname = None):
@@ -234,7 +239,6 @@ class Manager(part.Object):
         # TODO
         return {'available_heaters': self.available_heaters, 'available_sensors': self.available_sensors}
 
-def load_node_object(hal, node):
-    node.object = Manager(hal, node)
-    return node.object
+def load_node(name, hal, cparser = None):
+    return Manager(name, hal)
 

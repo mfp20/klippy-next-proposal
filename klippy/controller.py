@@ -3,16 +3,17 @@
 # - Board: mcu+pins+bus
 # - Controller: multiple board controller
 #
-# Copyright (C) 2016-2020   Kevin O'Connor <kevin@koconnor.net>
-# Copyright (C) 2019    Florian Heilmann <Florian.Heilmann@gmx.net>
-# Copyright (C) 2020    Anichang <anichang@protonmail.ch>
+# Copyright (C) 2016-2020 Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2019 Florian Heilmann <Florian.Heilmann@gmx.net>
+# Copyright (C) 2020 Anichang <anichang@protonmail.ch>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import re, logging, math, zlib, collections
-from messaging import msg
-from messaging import Kerr as error
-import part, chelper, serialhdl, timing
+import logging, sys, re, math, zlib, collections
+from text import msg
+from error import KError as error
+import tree, chelper, serialhdl, timing, msgproto
+logger = logging.getLogger(__name__)
 
 ######################################################################
 # Pins
@@ -307,7 +308,7 @@ PIN_MIN_TIME = 0.100
 class MCU_pin_out:
     def __init__(self, config):
         self.printer = config.get_printer()
-        ppins = self.printer.lookup_object('pins')
+        ppins = self.printer.lookup('pins')
         self.is_pwm = config.getboolean('pwm', False)
         if self.is_pwm:
             self.mcu_pin = ppins.setup_pin('pwm', config.get('pin'))
@@ -329,7 +330,7 @@ class MCU_pin_out:
             shutdown_value = config.getfloat('shutdown_value', 0., minval=0., maxval=self.scale) / self.scale
             self.mcu_pin.setup_start_value(self.last_value, shutdown_value)
             pin_name = config.get_name().split()[1]
-            self.gcode = self.printer.lookup_object('gcode')
+            self.gcode = self.printer.lookup('gcode')
             self.gcode.register_mux_command("SET_PIN", "PIN", pin_name, self.cmd_SET_PIN, desc=self.cmd_SET_PIN_help)
     def get_status(self, eventtime):
         return {'value': self.last_value}
@@ -339,7 +340,7 @@ class MCU_pin_out:
         value /= self.scale
         if value == self.last_value:
             return
-        print_time = self.printer.lookup_object('toolhead').get_last_move_time()
+        print_time = self.printer.lookup('toolhead').get_last_move_time()
         print_time = max(print_time, self.last_value_time + PIN_MIN_TIME)
         if self.is_pwm:
             self.mcu_pin.set_pwm(print_time, value)
@@ -545,6 +546,31 @@ class MCU_pin_in_adc:
 # MCU bus
 ######################################################################
 
+# SAMD based boards have six internal serial modules that can be configured individually.
+# Some are available for mapping onto specific pins. 
+# These interfaces are hardware based and can be I2Cs, UARTs or SPIs types.
+# TODO
+class MCU_samd_sercom:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.name = config.get_name().split()[1]
+        self.tx_pin = config.get("tx_pin")
+        self.rx_pin = config.get("rx_pin", None)
+        self.clk_pin = config.get("clk_pin")
+        ppins = self.printer.lookup("pins")
+        tx_pin_params = ppins.lookup_pin(self.tx_pin)
+        self.mcu = tx_pin_params['chip']
+        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=tx pin=%s" % (self.name, tx_pin_params['pin']))
+        clk_pin_params = ppins.lookup_pin(self.clk_pin)
+        if self.mcu is not clk_pin_params['chip']:
+           raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
+        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=clk pin=%s" % (self.name, clk_pin_params['pin']))
+        if self.rx_pin:
+            rx_pin_params = ppins.lookup_pin(self.rx_pin)
+            if self.mcu is not rx_pin_params['chip']:
+                raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
+            self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=rx pin=%s" % (self.name, rx_pin_params['pin']))
+
 # Helper code for working with devices connected to an MCU via an I2C bus
 class MCU_i2c:
     def __init__(self, mcu, bus, addr, speed):
@@ -594,7 +620,7 @@ class MCU_spi:
     def __init__(self, mcu, bus, pin, mode, speed, sw_pins=None):
         self.mcu = mcu
         self.bus = bus
-        # Config SPI object (set all CS pins high before spi_set_bus commands)
+        # Config SPI (set all CS pins high before spi_set_bus commands)
         self.oid = mcu.create_oid()
         if pin is None:
             mcu.add_config_cmd("config_spi_without_cs oid=%d" % (self.oid,))
@@ -633,31 +659,6 @@ class MCU_spi:
         self.spi_send_cmd.send([self.oid, data], minclock=minclock, reqclock=reqclock)
     def spi_transfer(self, data):
         return self.spi_transfer_cmd.send([self.oid, data])
-
-# SAMD based boards have six internal serial modules that can be configured individually.
-# Some are available for mapping onto specific pins. 
-# These interfaces are hardware based and can be I2Cs, UARTs or SPIs types.
-# TODO
-class MCU_samd_sercom:
-    def __init__(self, config):
-        self.printer = config.get_printer()
-        self.name = config.get_name().split()[1]
-        self.tx_pin = config.get("tx_pin")
-        self.rx_pin = config.get("rx_pin", None)
-        self.clk_pin = config.get("clk_pin")
-        ppins = self.printer.lookup_object("pins")
-        tx_pin_params = ppins.lookup_pin(self.tx_pin)
-        self.mcu = tx_pin_params['chip']
-        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=tx pin=%s" % (self.name, tx_pin_params['pin']))
-        clk_pin_params = ppins.lookup_pin(self.clk_pin)
-        if self.mcu is not clk_pin_params['chip']:
-           raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
-        self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=clk pin=%s" % (self.name, clk_pin_params['pin']))
-        if self.rx_pin:
-            rx_pin_params = ppins.lookup_pin(self.rx_pin)
-            if self.mcu is not rx_pin_params['chip']:
-                raise ppins.error("%s: SERCOM pins must be on same mcu" % (config.get_name(),))
-            self.mcu.add_config_cmd("set_sercom_pin bus=%s sercom_pin_type=rx pin=%s" % (self.name, rx_pin_params['pin']))
 
 ######################################################################
 # MCU
@@ -796,14 +797,11 @@ class MCU:
             self._send_config(config_params['crc'])
         # Setup steppersync with the move_count returned by get_config
         move_count = config_params['move_count']
-        self._steppersync = self._ffi_lib.steppersync_alloc(
-            self._serial.serialqueue, self._stepqueues, len(self._stepqueues),
-            move_count)
-        self._ffi_lib.steppersync_set_time(
-            self._steppersync, 0., self._mcu_freq)
+        self._steppersync = self._ffi_lib.steppersync_alloc(self._serial.serialqueue, self._stepqueues, len(self._stepqueues), move_count)
+        self._ffi_lib.steppersync_set_time(self._steppersync, 0., self._mcu_freq)
         # Log config information
         move_msg = "Configured MCU '%s' (%d moves)" % (self._name, move_count)
-        logging.debug(move_msg)
+        logger.debug(move_msg)
         log_info = self._log_info() + "\n" + move_msg
         self.hal.get_printer().set_rollover_info(self._name, log_info, log=False)
         # board configured
@@ -822,7 +820,7 @@ class MCU:
                 self._clocksync.connect(self._serial)
             except serialhdl.error as e:
                 raise error(str(e))
-        logging.debug(self._log_info())
+        logger.debug(self._log_info())
         #
         self._mcu_freq = self.get_constant_float('CLOCK_FREQ')
         self._stats_sumsq_base = self.get_constant_float('STATS_SUMSQ_BASE')
@@ -862,7 +860,7 @@ class MCU:
             return
         self._is_shutdown = True
         self._shutdown_msg = message = params['static_string_id']
-        logging.info("MCU '%s' %s: %s\n%s\n%s", self._name, params['#name'], self._shutdown_msg, self._clocksync.dump_debug(), self._serial.dump_debug())
+        logger.info("MCU '%s' %s: %s\n%s\n%s", self._name, params['#name'], self._shutdown_msg, self._clocksync.dump_debug(), self._serial.dump_debug())
         prefix = "MCU '%s' shutdown: " % (self._name,)
         if params['#name'] == 'is_shutdown':
             prefix = "Previous MCU '%s' shutdown: " % (self._name,)
@@ -875,7 +873,7 @@ class MCU:
         start_reason = self.hal.get_printer().get_args().get("start_reason")
         if start_reason == 'restart_mcu':
             return
-        logging.info("Attempting automated MCU '%s' restart: %s", self._name, reason)
+        logger.info("Attempting automated MCU '%s' restart: %s", self._name, reason)
         self.hal.get_printer().shutdown('restart_mcu')
         self._reactor.pause(self._reactor.monotonic() + 2.000)
         raise error("Attempt MCU '%s' restart failed" % (self._name,))
@@ -929,7 +927,7 @@ class MCU:
         # Transmit config messages (if needed)
         self.register_response(self._serial_handle_starting, 'starting')
         if prev_crc is None:
-            logging.debug("- Sending printer configuration to MCU '%s'.", self._name)
+            logger.debug("- Sending printer configuration to MCU '%s'.", self._name)
             for c in self._config_cmds:
                 self._serial.send(c)
         # Transmit init messages
@@ -1019,33 +1017,33 @@ class MCU:
         return self._clocksync.clock32_to_clock64(clock32)
     # restarts
     def _restart_arduino(self):
-        logging.info("Attempting MCU '%s' reset", self._name)
+        logger.info("Attempting MCU '%s' reset", self._name)
         self._event_handle_disconnect()
         serialhdl.arduino_reset(self._serialport, self._reactor)
     def _restart_cheetah(self):
-        logging.info("Attempting MCU '%s' Cheetah-style reset", self._name)
+        logger.info("Attempting MCU '%s' Cheetah-style reset", self._name)
         self._event_handle_disconnect()
         serialhdl.cheetah_reset(self._serialport, self._reactor)
     def _restart_via_command(self):
         if ((self._reset_cmd is None and self._config_reset_cmd is None)
             or not self._clocksync.is_active()):
-            logging.info("Unable to issue reset command on MCU '%s'", self._name)
+            logger.info("Unable to issue reset command on MCU '%s'", self._name)
             return
         if self._reset_cmd is None:
             # Attempt reset via config_reset command
-            logging.info("Attempting MCU '%s' config_reset command", self._name)
+            logger.info("Attempting MCU '%s' config_reset command", self._name)
             self._is_shutdown = True
             self._event_handle_shutdown(force=True)
             self._reactor.pause(self._reactor.monotonic() + 0.015)
             self._config_reset_cmd.send()
         else:
             # Attempt reset via reset command
-            logging.info("Attempting MCU '%s' reset command", self._name)
+            logger.info("Attempting MCU '%s' reset command", self._name)
             self._reset_cmd.send()
         self._reactor.pause(self._reactor.monotonic() + 0.015)
         self._event_handle_disconnect()
     def _restart_rpi_usb(self):
-        logging.info("Attempting MCU '%s' reset via rpi usb power", self._name)
+        logger.info("Attempting MCU '%s' reset via rpi usb power", self._name)
         self._event_handle_disconnect()
         chelper.run_hub_ctrl(0)
         self._reactor.pause(self._reactor.monotonic() + 2.)
@@ -1061,7 +1059,7 @@ class MCU:
             self._restart_arduino()
     # Misc external commands
     def is_fileoutput(self):
-        return self.hal.get_printer().get_args().get('output_debug') is not None
+        return self.hal.get_printer().get_args().output_debug is not None
     def is_shutdown(self):
         return self._is_shutdown
     def flush_moves(self, print_time):
@@ -1081,7 +1079,7 @@ class MCU:
         if (self._clocksync.is_active() or self.is_fileoutput() or self._is_timeout):
             return
         self._is_timeout = True
-        logging.info("Timeout with MCU '%s' (eventtime=%f)", self._name, eventtime)
+        logger.info("Timeout with MCU '%s' (eventtime=%f)", self._name, eventtime)
         self.hal.get_printer().call_shutdown("Lost communication with MCU '%s'" % (self._name,))
     def stats(self, eventtime):
         msg = "%s: mcu_awake=%.03f mcu_task_avg=%.06f mcu_task_stddev=%.06f" % (self._name, self._mcu_tick_awake, self._mcu_tick_avg, self._mcu_tick_stddev)
@@ -1094,22 +1092,22 @@ class MCU:
 ######################################################################
 
 # TODO
-class Dummy(part.Object):
-    def __init__(self, hal, node):
-        part.Object.__init__(self,hal,node)
-        logging.warning("(%s) controller.Dummy (dummy Board)", self.get_name())
+class Dummy(tree.Part):
+    def __init__(self, name, hal):
+        super().__init__(self, name, hal = hal)
+        logger.warning("(%s) controller.Dummy (dummy Board)", self.get_name())
         self.ready = True
     def register(self):
         pass
 
-class Board(part.Object):
+class Board(tree.Part):
     rmethods = [None, "arduino", "cheetah", "command", "rpi_usb"]
-    def __init__(self, hal, node):
-        part.Object.__init__(self,hal,node)
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.metaconf["serialport"] = {"t": "str", "default": "/dev/ttyS0"}
         self.metaconf["baud"] = {"t": "int", "default":250000, "minval":2400, "maxval":250000}
-        self.metaconf["restart_method"] = {"t": "choice", "choices":self.rmethods, "default":None}
         self.metaconf["pin_map"] = {"t": "str", "default":None}
+        self.metaconf["restart_method"] = {"t": "choice", "choices":self.rmethods, "default":None}
         self.metaconf["custom"] = {"t": "str", "default":""}
         self.metaconf["max_stepper_error"] = {"t": "float", "minval":0., "default":0.000025}
         #
@@ -1117,17 +1115,40 @@ class Board(part.Object):
         self.uarts = collections.OrderedDict()
         self.i2cs = collections.OrderedDict()
         self.spis = collections.OrderedDict()
+        self.msgparser = msgproto.MessageParser()
+    def _show_details(self, indent = 0):
+        "Return formatted details about mcu nodes."
+        txt = ""
+        # registered serial handlers
+        if len(self.mcu._serial.handlers) > 0:
+            txt = txt + "\t"*(indent+1) + "------------ (serial handlers)\n"
+            txt = txt + "\t"*indent + "\t(name, oid)\t\t(callback)\n"
+            for h in sorted(self.mcu._serial.handlers):
+                hparts = str(self.mcu._serial.handlers[h]).split(" ")
+                hname = hparts[2]
+                txt = txt + str("\t" * indent + "\t" + str(h).ljust(20, " ") + "\t" + hname + "\n")
+        # available pins and their config
+        matrix = self.pins.get_matrix()
+        if len(matrix) > 0:
+            txt = txt + "\t"*(indent+1) + "------------------- (all pins)\n"
+            txt = txt + "\t"*indent + "\t(pin)\t(alias)\t(pull)\t(invert)\t(used)\n"
+            for p in sorted(matrix):
+                if not p[2]:
+                    p[2] = False
+                txt = txt + str("\t" * indent + "\t  " + str(p[0]) + "\t" + str(p[1]) + "\t" + str(p[3]) + "\t" + str(p[4]) + "\t\t" + str(p[2]) + "\n")
+        txt = txt + "\t"*(indent+1) + "------------------------------\n"
+        return txt
     def init_mcu(self):
         if self.hal.mcu_count == 0:
             self.mcu = MCU(self.hal, self, self.id(), self.hal.get_timing())
         else:
-            self.mcu = MCU(self.hal, self, self.id(), timing.Secondary(self.hal, self.hal.get_reactor(), self.hal.get_timing()))
+            self.mcu = MCU(self.hal, self, self.id(), timing.Secondary(self.hal, self.hal.get_timing()))
         self.hal.mcu_count = self.hal.mcu_count + 1
         self.ready = True
     def mcu_restart(self):
-        logging.info("MCU_RESTART %s", self.name)
+        logger.info("MCU_RESTART %s", self.name)
         self.mcu.microcontroller_restart()
-    def register(self):
+    def _register(self):
         self.hal.get_printer().event_register_handler("mcu:"+self.id()+":identified", self._event_handle_identified)
         self.hal.get_printer().event_register_handler("mcu:"+self.id()+":configured", self._event_handle_configured)
     # events handlers
@@ -1145,7 +1166,7 @@ class Board(part.Object):
         # TODO
         # get uart
         # get available i2c
-        #enumerations = self.hal.get_node("mcu "+self.id()).object.mcu.get_enumerations()
+        #enumerations = self.hal.get_node("mcu "+self.id()).mcu.get_enumerations()
         #i2c = enumerations.get("i2c_bus", enumerations.get('bus'))
         #for i in i2c:
         #    self.bus_pin_reserve()
@@ -1275,9 +1296,9 @@ class Board(part.Object):
 ######################################################################
 
 # creates a virtual pin that propagates its changes to multiple output pins
-class VirtualPin(part.Object):
-    def __init__(self, hal, node):
-        part.Object.__init__(self,hal,node)
+class VirtualPin(tree.Part):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.metaconf["pins"] = {"t":"str"}
         self.pin_type = None
         self.ready = True
@@ -1339,10 +1360,10 @@ class StepperEnableTracker:
             curtime = self.hal.get_reactor().monotonic()
             if enable:
                 el.motor_enable(curtime)
-                logging.info("%s has been manually enabled", stepper)
+                logger.info("%s has been manually enabled", stepper)
             else:
                 el.motor_disable(curtime)
-                logging.info("%s has been manually disabled", stepper)
+                logger.info("%s has been manually disabled", stepper)
         else:
             self.hal.get_commander().respond_info('STEPPER_SWITCH: Invalid stepper "%s"' % (stepper))
     def debug_switch_tracker(self, tracker=None, enable=1):
@@ -1361,13 +1382,12 @@ class StepperEnableTracker:
         return self.enable_tracker[name]
 
 ######################################################################
-# Controller: multiboard mapper
+# Interface: multiboard mapper
 ######################################################################
 
-class Object(part.Object):
-    def __init__(self, hal, node):
-        part.Object.__init__(self,hal,node)
-        #
+class Interface(tree.Composite):
+    def __init__(self, name, hal):
+        super().__init__(name, hal = hal)
         self.board = {}
         self.board_ready = 0
         self.virtual = collections.OrderedDict()
@@ -1377,13 +1397,34 @@ class Object(part.Object):
         self.barometer = collections.OrderedDict()
         self.filament = collections.OrderedDict()
         self.stepper = collections.OrderedDict()
+        self.servo = collections.OrderedDict()
         self.heater = collections.OrderedDict()
         self.cooler = collections.OrderedDict()
         # generic stepper line tracker for ALL steppers and trackers
         self.stepper_linetracker = StepperEnableTracker(self.hal)
         #
         self.ready = True
-    def register(self):
+    def _show_details(self, indent = 0):
+        "Return formatted details about printer controller node."
+        txt = "\t"*(indent+1) + "\t(part)\t\t\t(pin type)\t\t\t(used pin)\n"
+        used = []
+        for kind in [self.virtual, 
+                self.endstop, 
+                self.thermometer, 
+                self.hygrometer, 
+                self.barometer, 
+                self.filament, 
+                self.stepper, 
+                self.servo, 
+                self.heater,
+                self.cooler]:
+            for part in sorted(kind):
+                for pin in sorted(kind[part].pin):
+                    used.append((part, pin, kind[part].pin[pin]))
+        for part, pin, obj in sorted(used):
+            txt = txt + "\t" * (indent+1) + "- " + part.ljust(20, " ") + " " + str(obj).split(" ")[0][1:].ljust(40, " ") + " " + pin + "\n"
+        return txt
+    def _register(self):
         for b in self.board:
             self.hal.get_printer().event_register_handler("board:"+b+":ready", self._event_handle_ready)
         self.hal.get_printer().event_register_handler("commander:request_restart", self._event_handle_request_restart)
@@ -1416,10 +1457,10 @@ class Object(part.Object):
     # return the board name part of "board:pin"
     def _p(self, pin):
         return pin.split(":")[1]
-    # return the board object from "board:pin"
+    # return the board from "board:pin"
     def _board(self, pin):
         return self.board[self._b(pin)]
-    # returns the mcu object from "board:pin"
+    # returns the mcu from "board:pin"
     def _mcu(self, pin):
         return self._board(pin).mcu
     # return a list of all registered boards
@@ -1463,61 +1504,60 @@ class Object(part.Object):
             # unregister
             for parts in [self.board, self.virtual, self.endstop, self.thermometer, self.hygrometer, self.barometer, self.filament, self.stepper, self.heater, self.cooler]:
                 if node.name in parts:
-                    if node.name.startswith("mcu "):
+                    if node.name().startswith("mcu "):
                         pass
-                    elif node.name.startswith("virtual "):
+                    elif node.name().startswith("virtual "):
                         pass
-                    elif node.name.startswith("sensor "):
-                        if node.attr("type") == "endstop":
+                    elif node.name().startswith("sensor "):
+                        if node._type == "endstop":
                             pass
-                        if node.attr("type") == "thermometer":
+                        if node._type == "thermometer":
                             pass
-                        if node.attr("type") == "hygrometer":
+                        if node._type == "hygrometer":
                             pass
-                        if node.attr("type") == "barometer":
+                        if node._type == "barometer":
                             pass
-                        if node.attr("type") == "filament":
+                        if node._type == "filament":
                             pass
-                    elif node.name.startswith("stepper "):
+                    elif node.name().startswith("stepper "):
                         pass
-                    elif node.name.startswith("heater "):
+                    elif node.name().startswith("heater "):
                         pass
-                    elif node.name.startswith("cooler "):
+                    elif node.name().startswith("cooler "):
                         pass
-                    return parts.pop(node.name)
-            logging.warning("Part '%s' not registered in controller. Can't de-register.", node.name)
+                    return parts.pop(node.name())
+            logger.warning("Part '%s' not registered in controller. Can't de-register.", node.name())
         else:
             # register
-            if node.name.startswith("mcu "):
+            if node.name().startswith("mcu "):
                 bname = node.id()
                 if bname in self.board:
                     raise error("Duplicate mcu name '%s'" % bname)
-                self.board[bname] = node.object = Board(self.hal, node)
-                node.attrs2obj()
+                self.board[bname] = node
                 self.board[bname].init_mcu()
-            elif node.name.startswith("virtual "):
-                self.virtual[node.name] = node.object = VirtualPin(self.hal,node)
-            elif node.name.startswith("sensor "):
-                if node.attr("type") == "endstop":
-                    self.endstop[node.name] = node.object
-                if node.attr("type") == "thermometer":
-                    self.thermometer[node.name] = node.object
-                if node.attr("type") == "hygrometer":
-                    self.hygrometer[node.name] = node.object
-                if node.attr("type") == "barometer":
-                    self.barometer[node.name] = node.object
-                if node.attr("type") == "filament":
-                    self.filament[node.name] = node.object
-            elif node.name.startswith("stepper "):
-                self.stepper[node.name] = node.object
-                self.stepper_linetracker.register_stepper(node.name, node.object.enable)
-            elif node.name.startswith("heater "):
-                self.heater[node.name] = node.object
-            elif node.name.startswith("cooler "):
-                self.cooler[node.name] = node.object
+            elif node.name().startswith("virtual "):
+                self.virtual[node.name()] = node
+            elif node.name().startswith("sensor "):
+                if node._type == "endstop":
+                    self.endstop[node.name()] = node
+                if node._type == "thermometer":
+                    self.thermometer[node.name()] = node
+                if node._type == "hygrometer":
+                    self.hygrometer[node.name()] = node
+                if node._type == "barometer":
+                    self.barometer[node.name()] = node
+                if node._type == "filament":
+                    self.filament[node.name()] = node
+            elif node.name().startswith("stepper "):
+                self.stepper[node.name()] = node
+                self.stepper_linetracker.register_stepper(node.name(), node.enable)
+            elif node.name().startswith("heater "):
+                self.heater[node.name()] = node
+            elif node.name().startswith("cooler "):
+                self.cooler[node.name()] = node
             else:
-                raise error("Unknown group for part '%s'. Can't register in controller.", name)
-        return node.object
+                raise error("Unknown group for part '%s'. Can't register in controller.", node.name())
+        return node
     #
     def cleanup(self):
         pass
@@ -1534,16 +1574,16 @@ class Object(part.Object):
     def cmd_SHOW_ADC_VALUE(self, params):
         'Report the last value of an analog pin.'
         # TODO
-        gcode = self.printer.lookup_object('gcode')
+        gcode = self.printer.lookup('gcode')
         name = gcode.get_str('NAME', params, None)
         mcu = ""
         value = mcu.adc_query(name)
         if not value:
             objs = ['"%s"' % (n,) for n in sorted(self.adc.keys())]
-            msg = "Available ADC objects: %s" % (', '.join(objs),)
+            msg = "Available ADCs: %s" % (', '.join(objs),)
             gcode.respond_info(msg)
             return
-        msg = 'ADC object "%s" has value %.6f (timestamp %.3f)' % value
+        msg = 'ADC "%s" has value %.6f (timestamp %.3f)' % value
         pullup = gcode.get_float('PULLUP', params, None, above=0.)
         if pullup is not None:
             v = max(.00001, min(.99999, value))
@@ -1561,9 +1601,9 @@ class Object(part.Object):
     def cmd_STEPPER_BUZZ(self, params):
         'Oscillate a given stepper to help id it.'
         stepper = self._lookup_stepper(params)
-        logging.info("Stepper buzz %s", stepper.get_name())
+        logger.info("Stepper buzz %s", stepper.get_name())
         was_enable = self.force_enable(stepper)
-        toolhead = self.printer.lookup_object('toolhead')
+        toolhead = self.printer.lookup('toolhead')
         dist, speed = BUZZ_DISTANCE, BUZZ_VELOCITY
         if stepper.units_in_radians():
             dist, speed = BUZZ_RADIANS_DISTANCE, BUZZ_RADIANS_VELOCITY
@@ -1598,7 +1638,7 @@ class Object(part.Object):
         distance = self.gcode.get_float('DISTANCE', params)
         speed = self.gcode.get_float('VELOCITY', params, above=0.)
         accel = self.gcode.get_float('ACCEL', params, 0., minval=0.)
-        logging.warning("STEPPER_MOVE_FORCE %s distance=%.3f velocity=%.3f accel=%.3f", stepper.get_name(), distance, speed, accel)
+        logger.warning("STEPPER_MOVE_FORCE %s distance=%.3f velocity=%.3f accel=%.3f", stepper.get_name(), distance, speed, accel)
         self.force_enable(stepper)
         self.move_force(stepper, distance, speed, accel)
     def cmd_STEPPER_SWITCH(self, params):
@@ -1616,15 +1656,12 @@ class Object(part.Object):
         self.stepper_linetracker.off()
 
 ATTRS = ("serialport", "baud", "pin_map", "restart_method")
-def load_node_object(hal, node):
-    if node.name == "controller":
-        node.object = Object(hal, node)
-    elif node.name.startswith("mcu "):
-        if node.attrs_check():
-            return hal.get_controller().register_part(node)
-        else:
-            node.object = Dummy(hal, node)
-    elif node.name.startswith("virtual "):
-        return hal.get_controller().register_part(node)
-    return node.object
+def load_node(name, hal, cparser = None):
+    if name == "controller":
+        return Interface(name, hal)
+    elif name.startswith("mcu "):
+        return Board(name, hal)
+    elif name.startswith("virtual "):
+        return VirtualPin(name, hal)
+    return None
 
